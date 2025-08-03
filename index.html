@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Record and Plot Spectrogram (PyScript)</title>
+    <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
+    <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+</head>
+<body>
+    <h2>Record and Plot Spectrogram (PyScript Demo)</h2>
+    <button id="record-btn">Record 3 seconds</button>
+    <div id="status"></div>
+    <div id="plot"></div>
+
+    <py-config>
+        packages = [
+            "numpy",
+            "matplotlib"
+        ]
+    </py-config>
+
+    <py-script>
+import numpy as np
+import matplotlib.pyplot as plt
+from js import Uint8Array, document
+from pyodide.ffi import create_proxy
+
+def plot_spectrogram(audio_data, sr):
+    plt.figure(figsize=(10, 4))
+    plt.specgram(audio_data, Fs=sr, NFFT=1024, noverlap=512, cmap="viridis")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Frequency (Hz)")
+    plt.title("Spectrogram")
+    plt.colorbar(label="Intensity [dB]")
+    plt.tight_layout()
+    plt.show()
+
+def handle_audio(event):
+    # Get the audio data from JS (Float32Array)
+    arr = np.array(event.detail.to_py(), dtype=np.float32)
+    sr = 20000  # Sample rate
+    plot_spectrogram(arr, sr)
+    document.getElementById("status").innerText = "Spectrogram generated below."
+
+# Register the Python callback for audio data
+audio_proxy = create_proxy(handle_audio)
+document.addEventListener("audio_recorded", audio_proxy)
+    </py-script>
+
+    <script>
+    // JavaScript: Record audio and send to PyScript
+    const recordBtn = document.getElementById("record-btn");
+    const statusDiv = document.getElementById("status");
+    let audioContext, mediaRecorder, audioChunks = [];
+
+    recordBtn.onclick = async () => {
+        statusDiv.innerText = "Requesting microphone access...";
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        statusDiv.innerText = "Recording for 3 seconds...";
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 20000});
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        let buffer = [];
+        processor.onaudioprocess = e => {
+            buffer.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+        };
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        setTimeout(() => {
+            processor.disconnect();
+            source.disconnect();
+            stream.getTracks().forEach(track => track.stop());
+            // Concatenate all buffers
+            let flat = new Float32Array(buffer.reduce((acc, cur) => acc + cur.length, 0));
+            let offset = 0;
+            for (let chunk of buffer) {
+                flat.set(chunk, offset);
+                offset += chunk.length;
+            }
+            // Send to PyScript
+            const event = new CustomEvent("audio_recorded", { detail: flat });
+            document.dispatchEvent(event);
+            statusDiv.innerText = "Recording complete. Generating spectrogram...";
+        }, 3000);
+    };
+    </script>
+</body>
+</html>
