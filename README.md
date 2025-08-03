@@ -1,8 +1,8 @@
 # bat
-bat speech recognition 
-model_06222_9939.keras model can achieve 99.39% accuracy.
-to test run the model (depoly) use file 'depoly_prediction_0622.py'
-the training program is 'training_06222025.py'
+part 1 - spectrographs demo files and corresponding .wav files are here.
+        visitor voice recording and plot .py file is also here.
+
+part 2 - trained model for feeding and fighting is here. listen2predict file is here.
 
 
 complete set of traving and testing .wav files can be found here
