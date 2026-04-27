@@ -1,0 +1,35 @@
+[Unit]
+Description=Bat Activity Monitoring System
+Documentation=https://github.com/yourusername/bat-monitor
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/bat-monitor
+Environment="PATH=/home/pi/bat-monitor/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/pi/bat-monitor/venv/bin/python3 /home/pi/bat-monitor/main.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bat-monitor
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+MemoryLimit=400M
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target
