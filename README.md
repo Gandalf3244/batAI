@@ -99,7 +99,7 @@ Use this if you just want to run the existing trained model on hardware, without
    - INMP441 I2S microphone
    - DS3231 real-time clock module
    - TFT LCD + EC11 rotary encoder for on-device controls
-   - 3D-printed enclosure (see Onshape / Prusa MK4S files if included)
+   - 3D-printed enclosure
 5. Install dependencies on the Pi:
    ```bash
    pip install tflite-runtime numpy librosa
