@@ -6,11 +6,11 @@ A CNN-LSTM deep learning system that classifies fruit bat vocalizations and pred
 
 ## Overview
 
-Oregon Zoo zookeepers must order food for their Rodrigues flying foxes and straw-colored fruit bats one day in advance, without knowing how much the bats ate overnight. This leads to food waste or costly emergency orders.
+Oregon Zoo zookeepers must order food for their Rodrigues flying foxes and straw-colored fruit bats one day in advance, without knowing how much the bats ate overnight. This leads to food waste or shortages.
 
 **batAI** solves this by recording overnight vocalizations, classifying each call by behavior type, and automatically emailing zookeepers a food consumption prediction each morning.
 
-The system found a moderate positive correlation (r = 0.5) between straw bat "want food" vocalizations and next-day food consumption.
+The system found a moderate positive correlation (**r = 0.5**) between straw bat “want food” vocalizations and next-day food consumption.
 
 ---
 
@@ -26,15 +26,15 @@ The system found a moderate positive correlation (r = 0.5) between straw bat "wa
 
 ## Model
 
-A hybrid CNN-LSTM architecture built with Keras/TensorFlow. Audio is converted to mel-spectrograms (79 × 120), passed through two convolutional blocks (64 and 128 filters), an LSTM layer for temporal context, and a dense classification layer with softmax output. Training data was balanced to 896 samples per class using SpecAugment. For the Raspberry Pi, the model is converted to TFLite with LSTM unrolling.
+A hybrid CNN-LSTM architecture built with Keras/TensorFlow. Audio is converted to mel-spectrograms (79 × 120), passed through two convolutional blocks (64 and 128 filters), an LSTM layer for temporal modeling, and dense layers for behavior classification.
 
 ---
 
 ## Components
 
-**GUI** — A Tkinter app that loads an overnight recording, segments and classifies vocalizations (confidence threshold: 0.7), plots frequency over time, and exports data to Google Sheets. A companion Apps Script calculates correlations and generates trendline plots.
+**GUI** — A Tkinter app that loads an overnight recording, segments and classifies vocalizations (confidence threshold: 0.7), plots frequency over time, and exports data to Google Sheets. A companion email script sends a daily prediction report.
 
-**Embedded System** — A self-contained Raspberry Pi Zero 2W unit installed in the bat exhibit. Records at scheduled times, runs inference locally, and emails a full overnight report to zookeepers automatically on boot.
+**Embedded System** — A self-contained Raspberry Pi Zero 2W unit installed in the bat exhibit. Records at scheduled times, runs inference locally, and emails a full overnight report to zookeepers.
 
 Hardware: INMP441 microphone, DS3231 real-time clock, TFT LCD + EC11 rotary encoder, 3D-printed case (Onshape / Prusa MK4S).
 
@@ -64,7 +64,7 @@ python convert_tflite.py  # convert for embedded deployment
 
 ## Authors
 
-**Daniel Liu**
+**Daniel Liu**  
 **Emily Liu**
 
 ---
