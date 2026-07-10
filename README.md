@@ -39,6 +39,7 @@ batAI/
 ├── AI Model/            # Trained model files and inference code
 ├── Embedded System/      # Raspberry Pi firmware / deployment scripts
 ├── Preprocessing/        # Audio segmentation, labeling, spectrogram generation
+├── Results/             # Spreadsheet with data and AppsScript for data processing
 ├── Training/              # Model training scripts and experiments
 ├── behavior_timeline_gui.py   # Tkinter GUI for reviewing/classifying recordings
 └── README.md
