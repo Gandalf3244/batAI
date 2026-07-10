@@ -107,14 +107,17 @@ Use this if you just want to run the existing trained model on hardware, without
 6. Configure recording schedule, email credentials, and any exhibit-specific settings in the config section of the main script in `Embedded System/`.
 7. Run the main script (check the folder for the exact entry-point filename, e.g. `main.py`) — it will record on schedule, classify overnight, and email zookeepers a report each morning.
 
-#### 3. Everything else (GUI, preprocessing)
+#### 3. GUI, preprocessing
 
 - **Preprocessing** (`Preprocessing/`) — this is how the labeled clips in `Training/` were originally created: segmenting raw overnight recordings into individual clips and labeling them by behavior. You generally don't need to re-run this unless you're adding brand-new raw recordings to expand the dataset.
 - **GUI** (`behavior_timeline_gui.py`) — a standalone Tkinter app for manually reviewing a recording, classifying vocalizations (confidence threshold: 0.7), plotting call frequency over time, and exporting results to Google Sheets:
   ```bash
   python behavior_timeline_gui.py
   ```
+#### 4. Analyze data
 
+- **Spreadsheet** - all of the data collected for calculating the correlation over the course of 2 weeks.
+- **AppsScript** - The .gs code used to automatically analyze the data (only works on Google Sheets)
 ---
 
 ## Awards
