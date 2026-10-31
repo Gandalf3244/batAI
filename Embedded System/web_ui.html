@@ -1,0 +1,1085 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bat Monitor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%23f5b544' d='M32 20c-2 0-3-3-3-5-3 2-4 6-4 9-6-6-15-6-23-2 6 2 9 7 9 12 4-3 9-3 12 1 2-2 5-3 9-3s7 1 9 3c3-4 8-4 12-1 0-5 3-10 9-12-8-4-17-4-23 2 0-3-1-7-4-9 0 2-1 5-3 5z'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #0a0f1d;
+  --bg-glow: #121b36;
+  --panel: #111a2e;
+  --panel-2: #172239;
+  --line: #233150;
+  --line-soft: #1b2742;
+  --text: #e8edf8;
+  --muted: #8d99b8;
+  --faint: #5c6888;
+  --accent: #f5b544;
+  --accent-ink: #1a1203;
+  --accent-soft: rgba(245, 181, 68, .14);
+  --blue: #7c9cff;
+  --ok: #3fd18f;
+  --ok-soft: rgba(63, 209, 143, .14);
+  --bad: #ff6b6b;
+  --bad-soft: rgba(255, 107, 107, .14);
+  --c1: #ff8a65; --c2: #7c9cff; --c3: #3fd18f; --c4: #f5b544;
+  --radius: 14px;
+  --shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 10px 30px rgba(0,0,0,.25);
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f5fa; --bg-glow: #e6ebf7; --panel: #ffffff; --panel-2: #f6f8fc;
+    --line: #dde3ef; --line-soft: #e9edf5; --text: #141b2d; --muted: #5d6882; --faint: #98a2b9;
+    --accent: #d8901a; --accent-ink: #fff; --accent-soft: rgba(216, 144, 26, .12);
+    --blue: #4565e0; --ok: #14a46b; --ok-soft: rgba(20,164,107,.1); --bad: #d93f3f; --bad-soft: rgba(217,63,63,.1);
+    --c1: #e8663f; --c2: #4f6ee8; --c3: #14a46b; --c4: #d8901a;
+    --shadow: 0 1px 2px rgba(20,27,45,.06), 0 6px 20px rgba(20,27,45,.06);
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f3f5fa; --bg-glow: #e6ebf7; --panel: #ffffff; --panel-2: #f6f8fc;
+  --line: #dde3ef; --line-soft: #e9edf5; --text: #141b2d; --muted: #5d6882; --faint: #98a2b9;
+  --accent: #d8901a; --accent-ink: #fff; --accent-soft: rgba(216, 144, 26, .12);
+  --blue: #4565e0; --ok: #14a46b; --ok-soft: rgba(20,164,107,.1); --bad: #d93f3f; --bad-soft: rgba(217,63,63,.1);
+  --c1: #e8663f; --c2: #4f6ee8; --c3: #14a46b; --c4: #d8901a;
+  --shadow: 0 1px 2px rgba(20,27,45,.06), 0 6px 20px rgba(20,27,45,.06);
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--text);
+  background: radial-gradient(1200px 600px at 80% -10%, var(--bg-glow), transparent 60%), var(--bg);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+button, input, select { font: inherit; color: inherit; }
+a { color: var(--blue); }
+
+/* ---------- layout ---------- */
+.app { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+.side {
+  position: sticky; top: 0; height: 100vh; padding: 22px 14px;
+  border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 4px;
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 18px; }
+.brand svg { width: 34px; height: 34px; }
+.brand b { font-size: 16px; letter-spacing: .2px; display: block; }
+.brand small { color: var(--muted); font-size: 12px; }
+.nav button {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 12px; border: 0;
+  background: none; border-radius: 10px; color: var(--muted); cursor: pointer; text-align: left; font-weight: 500;
+}
+.nav button svg { width: 18px; height: 18px; flex: none; opacity: .85; }
+.nav button:hover { background: var(--panel); color: var(--text); }
+.nav button[aria-current="true"] { background: var(--accent-soft); color: var(--accent); }
+.side .foot { margin-top: auto; padding: 10px; color: var(--faint); font-size: 12px; }
+.side .foot button { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 4px 9px; cursor: pointer; }
+
+main { padding: 26px 34px 60px; max-width: 1180px; width: 100%; }
+.topbar { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+.topbar h1 { font-size: 22px; margin: 0; letter-spacing: -.2px; }
+.topbar .spacer { flex: 1; }
+
+.banner { display: none; padding: 11px 14px; border-radius: 12px; margin-bottom: 18px; border: 1px solid; }
+.banner.show { display: flex; gap: 10px; align-items: center; }
+.banner.bad { background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 35%, transparent); color: var(--bad); }
+.banner.warn { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
+
+.page { display: none; animation: fade .18s ease; }
+.page.active { display: block; }
+@keyframes fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); }
+.span-12 { grid-column: span 12; } .span-8 { grid-column: span 8; } .span-7 { grid-column: span 7; }
+.span-6 { grid-column: span 6; } .span-5 { grid-column: span 5; } .span-4 { grid-column: span 4; }
+
+.card {
+  background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius);
+  padding: 18px 20px; box-shadow: var(--shadow); min-width: 0;
+}
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.card h2 .right { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
+.card p.help { color: var(--muted); margin: -6px 0 16px; }
+
+/* ---------- pills & buttons ---------- */
+.pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 99px; font-size: 13px; font-weight: 600; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line-soft); }
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill.live { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+.pill.live .dot { animation: pulse 1.6s infinite; }
+.pill.bad { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+.pill.warn { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 16px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel-2); cursor: pointer; font-weight: 600; white-space: nowrap;
+  transition: transform .06s ease, background .15s ease, border-color .15s ease, opacity .15s;
+}
+.btn:hover { border-color: var(--faint); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn svg { width: 16px; height: 16px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.danger { background: var(--bad-soft); border-color: transparent; color: var(--bad); }
+.btn.go { background: var(--ok); border-color: var(--ok); color: #04130c; }
+.btn.small { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
+.btn.ghost { background: none; }
+.btn .spin { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- dashboard ---------- */
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat .big { font-size: 40px; font-weight: 700; letter-spacing: -1px; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.stat .sub { color: var(--muted); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 16px; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.bars { display: flex; flex-direction: column; gap: 11px; margin-top: 16px; }
+.bar-row { display: grid; grid-template-columns: 130px 1fr 48px; align-items: center; gap: 10px; }
+.bar-row .name { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar-row .track { height: 9px; background: var(--panel-2); border-radius: 99px; overflow: hidden; }
+.bar-row .fill { display: block; height: 100%; border-radius: 99px; width: 0; transition: width .5s ease; }
+.bar-row .n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.meter { position: relative; height: 30px; border-radius: 9px; background: var(--panel-2); overflow: hidden; border: 1px solid var(--line-soft); }
+.meter .floor { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--blue) 40%, transparent); transition: width .4s ease; }
+.meter .loud { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, color-mix(in srgb, var(--ok) 55%, transparent), color-mix(in srgb, var(--accent) 70%, transparent)); transition: width .4s ease; opacity: .55; }
+.meter .thr { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--bad); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bad) 25%, transparent); transition: left .2s ease; }
+.meter-scale { display: flex; justify-content: space-between; color: var(--faint); font-size: 11px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: 12.5px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12.5px; padding: 0 8px 8px; border-bottom: 1px solid var(--line-soft); }
+td { padding: 8px; border-bottom: 1px solid var(--line-soft); }
+tr:last-child td { border-bottom: 0; }
+.tag { display: inline-flex; align-items: center; gap: 7px; }
+.tag i { width: 8px; height: 8px; border-radius: 50%; }
+.empty { color: var(--faint); text-align: center; padding: 26px 8px; }
+
+.formula { font-family: var(--mono); font-size: 12.5px; color: var(--muted); background: var(--panel-2); padding: 8px 10px; border-radius: 8px; margin-top: 12px; overflow-x: auto; white-space: nowrap; }
+
+/* ---------- forms ---------- */
+.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
+.fields .full { grid-column: 1 / -1; }
+.field label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 13.5px; }
+.field .hint { color: var(--muted); font-size: 12.5px; margin-top: 5px; }
+.field .err { color: var(--bad); font-size: 12.5px; margin-top: 5px; display: none; }
+.field.invalid .err { display: block; }
+.field.invalid input { border-color: var(--bad); }
+input[type=text], input[type=email], input[type=password], input[type=number], input[type=time], input[type=datetime-local], select {
+  width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+input[type=time] { font-size: 20px; font-weight: 600; padding: 8px 12px; font-variant-numeric: tabular-nums; }
+.inline { display: flex; gap: 8px; align-items: center; }
+.inline > input { flex: 1; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.unit { color: var(--muted); font-size: 13px; white-space: nowrap; }
+
+.switch { display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; }
+.switch input { appearance: none; width: 42px; height: 24px; border-radius: 99px; background: var(--line); position: relative; cursor: pointer; transition: background .15s; flex: none; margin: 0; }
+.switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.switch input:checked { background: var(--ok); }
+.switch input:checked::after { transform: translateX(18px); }
+
+.formbar { display: flex; align-items: center; gap: 10px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.formbar .status { color: var(--muted); font-size: 13px; }
+.formbar .status.dirty { color: var(--accent); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); min-height: 46px; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 11px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
+.chip button { border: 0; background: none; cursor: pointer; color: var(--muted); width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; padding: 0; }
+.chip button:hover { background: var(--bad-soft); color: var(--bad); }
+.chips input { border: 0 !important; background: none !important; box-shadow: none !important; flex: 1; min-width: 180px; padding: 4px 6px !important; }
+
+.timeline { position: relative; height: 46px; border-radius: 10px; background: var(--panel-2); overflow: hidden; border: 1px solid var(--line-soft); margin-top: 6px; }
+.timeline .win { position: absolute; top: 0; bottom: 0; background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 40%, transparent), color-mix(in srgb, var(--accent) 22%, transparent)); border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+.timeline .now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); }
+.timeline .now::after { content: "now"; position: absolute; top: 3px; left: 5px; font-size: 11px; color: var(--text); font-weight: 600; }
+.ticks { display: flex; justify-content: space-between; color: var(--faint); font-size: 11px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.night-sum { margin-top: 12px; color: var(--muted); }
+.night-sum b { color: var(--text); }
+
+.presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+
+.nets { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-height: 320px; overflow: auto; }
+.net { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line-soft); background: var(--panel-2); cursor: pointer; text-align: left; width: 100%; }
+.net:hover { border-color: var(--accent); }
+.net .sig { display: flex; gap: 2px; align-items: flex-end; height: 14px; }
+.net .sig i { width: 3px; background: var(--line); border-radius: 1px; }
+.net .sig i.on { background: var(--ok); }
+.net .ssid { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.clockface { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+.clockface small { font-size: 14px; color: var(--muted); font-weight: 500; letter-spacing: 0; margin-left: 6px; }
+
+.logs { font-family: var(--mono); font-size: 12px; line-height: 1.55; background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 10px; padding: 12px 14px; height: 560px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+.logs .ERROR, .logs .CRITICAL { color: var(--bad); }
+.logs .WARNING { color: var(--accent); }
+.logs .DEBUG { color: var(--faint); }
+.logs mark { background: var(--accent-soft); color: inherit; border-radius: 3px; }
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.toolbar input[type=text] { max-width: 260px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: none; padding: 7px 12px; cursor: pointer; color: var(--muted); font-weight: 500; }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+
+code.cmd { display: block; font-family: var(--mono); font-size: 12.5px; background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 8px; padding: 9px 12px; margin: 6px 0 10px; overflow-x: auto; white-space: nowrap; user-select: all; }
+
+/* ---------- toasts & modal ---------- */
+.toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 50; max-width: min(420px, calc(100vw - 32px)); }
+.toast { padding: 12px 15px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(0,0,0,.35); display: flex; gap: 10px; align-items: flex-start; animation: rise .2s ease; }
+.toast.ok { border-left: 4px solid var(--ok); }
+.toast.bad { border-left: 4px solid var(--bad); }
+.toast.info { border-left: 4px solid var(--blue); }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+dialog { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--text); padding: 22px; max-width: 440px; width: calc(100vw - 32px); box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+dialog::backdrop { background: rgba(5, 8, 18, .6); backdrop-filter: blur(3px); }
+dialog h3 { margin: 0 0 8px; font-size: 17px; }
+dialog p { color: var(--muted); margin: 0 0 20px; }
+dialog .actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 980px) {
+  .span-8, .span-7, .span-6, .span-5, .span-4 { grid-column: span 12; }
+}
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; }
+  .side { position: sticky; z-index: 10; height: auto; flex-direction: row; align-items: center; padding: 10px 16px; gap: 6px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line-soft); background: var(--bg); }
+  .brand { padding: 0 8px 0 0; } .brand div { display: none; }
+  .nav { display: flex; gap: 4px; }
+  .nav button { width: auto; padding: 8px 11px; white-space: nowrap; }
+  .side .foot { display: none; }
+  main { padding: 18px 16px 50px; }
+  .fields { grid-template-columns: 1fr; }
+  .bar-row { grid-template-columns: 100px 1fr 40px; }
+  .stat .big { font-size: 34px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><path fill="var(--accent)" d="M32 20c-2 0-3-3-3-5-3 2-4 6-4 9-6-6-15-6-23-2 6 2 9 7 9 12 4-3 9-3 12 1 2-2 5-3 9-3s7 1 9 3c3-4 8-4 12-1 0-5 3-10 9-12-8-4-17-4-23 2 0-3-1-7-4-9 0 2-1 5-3 5z"/></svg>
+      <div><b>Bat Monitor</b><small id="hostname">connecting…</small></div>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-page="dashboard" aria-current="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Dashboard</button>
+      <button data-page="schedule"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>Schedule</button>
+      <button data-page="email"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>Email &amp; reports</button>
+      <button data-page="detection"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 12h3l3-8 4 16 3-8h7"/></svg>Detection</button>
+      <button data-page="wifi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M2 9a15 15 0 0 1 20 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/></svg>WiFi</button>
+      <button data-page="clock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Clock</button>
+      <button data-page="system"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></svg>System</button>
+      <button data-page="logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Logs</button>
+    </nav>
+    <div class="foot">
+      <button id="themeBtn" type="button">Theme: auto</button>
+    </div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <h1 id="pageTitle">Dashboard</h1>
+      <span class="spacer"></span>
+      <span class="pill" id="statePill"><span class="dot"></span><span>Loading</span></span>
+      <button class="btn" id="monitorBtn" disabled>…</button>
+    </div>
+
+    <div class="banner bad" id="connBanner">Lost connection to the Pi. Is the SSH tunnel still open? Retrying…</div>
+    <div class="banner warn" id="modeBanner"></div>
+    <div class="banner bad" id="errBanner"></div>
+
+    <!-- ======================= DASHBOARD ======================= -->
+    <section class="page active" id="page-dashboard">
+      <div class="grid">
+        <div class="card span-4">
+          <h2>Tonight</h2>
+          <div class="stat"><span class="big" id="dTotal">—</span><span class="sub" id="dTotalSub">vocalizations</span></div>
+          <div class="bars" id="dBars"></div>
+        </div>
+        <div class="card span-4">
+          <h2>Session</h2>
+          <dl class="kv">
+            <dt>Status</dt><dd id="dState">—</dd>
+            <dt>Started</dt><dd id="dStart">—</dd>
+            <dt>Running for</dt><dd id="dDur">—</dd>
+            <dt id="dNextLabel">Next start</dt><dd id="dNext">—</dd>
+            <dt>Sounds heard</dt><dd id="dSegs">—</dd>
+            <dt>Below confidence</dt><dd id="dLow">—</dd>
+          </dl>
+        </div>
+        <div class="card span-4">
+          <h2>Food prediction</h2>
+          <div class="stat"><span class="big" id="dFood">—</span><span class="sub">predicted consumption tomorrow</span></div>
+          <div class="formula" id="dFormula">—</div>
+        </div>
+
+        <div class="card span-7">
+          <h2>Microphone level <span class="right"><span class="pill" id="dMicPill">no signal</span></span></h2>
+          <div class="meter"><div class="floor" id="mFloor"></div><div class="loud" id="mLoud"></div><div class="thr" id="mThr"></div></div>
+          <div class="meter-scale"><span>-100 dB</span><span>-80</span><span>-60</span><span>-40</span><span>-20</span><span>0 dB</span></div>
+          <div class="legend">
+            <span><i style="background:color-mix(in srgb, var(--blue) 55%, transparent)"></i>Background <b id="mFloorV">—</b></span>
+            <span><i style="background:var(--ok)"></i>Loudest sound <b id="mLoudV">—</b></span>
+            <span><i style="background:var(--bad)"></i>Detection threshold <b id="mThrV">—</b></span>
+          </div>
+        </div>
+        <div class="card span-5">
+          <h2>Health</h2>
+          <dl class="kv">
+            <dt>Clock</dt><dd id="hClock">—</dd>
+            <dt>RTC temperature</dt><dd id="hRtcT">—</dd>
+            <dt>CPU temperature</dt><dd id="hCpu">—</dd>
+            <dt>Memory / load</dt><dd id="hMem">—</dd>
+            <dt>Disk free</dt><dd id="hDisk">—</dd>
+            <dt>Email</dt><dd id="hEmail">—</dd>
+            <dt>Uptime</dt><dd id="hUp">—</dd>
+          </dl>
+        </div>
+
+        <div class="card span-12">
+          <h2>Recent detections <span class="right" id="dLast"></span></h2>
+          <table>
+            <thead><tr><th>Time</th><th>Call type</th><th style="text-align:right">Confidence</th></tr></thead>
+            <tbody id="dRecent"><tr><td colspan="3" class="empty">Nothing yet</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= SCHEDULE ======================= -->
+    <section class="page" id="page-schedule">
+      <form class="card" data-form>
+        <h2>Recording window</h2>
+        <p class="help">Monitoring starts and stops automatically every day. A window can run past midnight (e.g. 18:00 → 06:00). The email report is sent when the window ends.</p>
+        <div class="fields">
+          <div class="field"><label for="s-start">Start</label><input type="time" id="s-start" name="schedule.start_time" required><div class="err"></div></div>
+          <div class="field"><label for="s-stop">Stop</label><input type="time" id="s-stop" name="schedule.stop_time" required><div class="err"></div></div>
+          <div class="field full">
+            <div class="timeline" id="tl"></div>
+            <div class="ticks"><span>00</span><span>03</span><span>06</span><span>09</span><span>12</span><span>15</span><span>18</span><span>21</span><span>24</span></div>
+            <div class="night-sum" id="tlSum"></div>
+          </div>
+          <div class="field full"><label class="switch"><input type="checkbox" name="schedule.enabled"> <span>Use the schedule <span class="hint" style="display:inline">— when off, monitoring only runs when you start it by hand</span></span></label></div>
+        </div>
+        <div class="formbar"><button class="btn primary" type="submit" disabled>Save schedule</button><span class="status"></span></div>
+      </form>
+    </section>
+
+    <!-- ======================= EMAIL ======================= -->
+    <section class="page" id="page-email">
+      <div class="grid">
+        <form class="card span-12" data-form>
+          <h2>Sending account</h2>
+          <p class="help">For Gmail, turn on 2-step verification and create an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">app password</a> — your normal password won't work.</p>
+          <div class="fields">
+            <div class="field"><label for="e-host">SMTP server</label><input type="text" id="e-host" name="email.smtp_host" autocomplete="off">
+              <div class="presets"><button type="button" class="btn small ghost" data-preset="smtp.gmail.com:587">Gmail</button><button type="button" class="btn small ghost" data-preset="smtp.office365.com:587">Outlook</button><button type="button" class="btn small ghost" data-preset="smtp.mail.yahoo.com:465">Yahoo</button></div>
+              <div class="err"></div></div>
+            <div class="field"><label for="e-port">Port</label><input type="number" id="e-port" name="email.smtp_port" data-type="int" min="1" max="65535"><div class="hint">587 = STARTTLS, 465 = SSL</div><div class="err"></div></div>
+            <div class="field"><label for="e-from">Sender address</label><input type="email" id="e-from" name="email.sender_email" autocomplete="off"><div class="err"></div></div>
+            <div class="field"><label for="e-pw">App password</label><input type="password" id="e-pw" name="email.sender_password" data-secret autocomplete="new-password"><div class="hint" data-secret-hint></div><div class="err"></div></div>
+            <div class="field full"><label>Recipients</label>
+              <div class="chips" data-chips="email.recipients"><input type="email" placeholder="Type an address and press Enter" aria-label="Add recipient"></div>
+              <div class="hint">Everyone here gets the nightly report.</div><div class="err" data-for="email.recipients"></div></div>
+          </div>
+          <div class="formbar">
+            <button class="btn primary" type="submit" disabled>Save email settings</button>
+            <button class="btn" type="button" id="testEmailBtn">Send test email</button>
+            <span class="status"></span>
+          </div>
+        </form>
+
+        <form class="card span-12" data-form>
+          <h2>Food prediction trendline</h2>
+          <p class="help">The report predicts tomorrow's food consumption from Straws "Want Food" calls per hour: <b>consumption = slope × calls/hr + intercept</b>.</p>
+          <div class="fields">
+            <div class="field"><label for="t-m">Slope</label><input type="number" step="any" id="t-m" name="email.trendline_slope" data-type="float"><div class="err"></div></div>
+            <div class="field"><label for="t-b">Intercept</label><input type="number" step="any" id="t-b" name="email.trendline_intercept" data-type="float"><div class="err"></div></div>
+            <div class="field full"><div class="formula" id="tPreview">—</div></div>
+          </div>
+          <div class="formbar"><button class="btn primary" type="submit" disabled>Save trendline</button><span class="status"></span></div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ======================= DETECTION ======================= -->
+    <section class="page" id="page-detection">
+      <div class="grid">
+        <div class="card span-12">
+          <h2>Live level <span class="right"><span class="pill" id="d2MicPill">no signal</span></span></h2>
+          <p class="help">The AI model gives every sound a label — even silence — so only sounds louder than the <b style="color:var(--bad)">threshold</b> are classified. Set it just above the <b>background</b> level during a quiet period, and below the level of real calls. Changes apply within a second.</p>
+          <div class="meter"><div class="floor" id="m2Floor"></div><div class="loud" id="m2Loud"></div><div class="thr" id="m2Thr"></div></div>
+          <div class="meter-scale"><span>-100 dB</span><span>-80</span><span>-60</span><span>-40</span><span>-20</span><span>0 dB</span></div>
+          <div class="legend">
+            <span><i style="background:color-mix(in srgb, var(--blue) 55%, transparent)"></i>Background <b id="m2FloorV">—</b></span>
+            <span><i style="background:var(--ok)"></i>Loudest sound <b id="m2LoudV">—</b></span>
+          </div>
+        </div>
+        <form class="card span-12" data-form>
+          <h2>Detection</h2>
+          <div class="fields">
+            <div class="field full"><label for="x-thr">Energy threshold</label>
+              <div class="inline"><input type="range" id="x-thr-range" min="-100" max="-10" step="0.5" aria-label="Energy threshold in dB">
+                <input type="number" step="any" id="x-thr" name="audio.energy_threshold" data-type="float" style="max-width:130px" min="0" max="1"></div>
+              <div class="hint" id="x-thr-hint">RMS level (0–1)</div><div class="err"></div></div>
+            <div class="field full"><label for="x-conf">Minimum confidence</label>
+              <div class="inline"><input type="range" id="x-conf" name="model.confidence_threshold" data-type="float" min="0" max="1" step="0.01"><span class="unit" id="x-conf-v" style="min-width:48px;text-align:right">—</span></div>
+              <div class="hint">Classifications less certain than this are ignored.</div><div class="err"></div></div>
+            <div class="field"><label for="x-min">Shortest call</label><div class="inline"><input type="number" step="0.05" id="x-min" name="audio.min_vocalization_duration" data-type="float"><span class="unit">seconds</span></div><div class="err"></div></div>
+            <div class="field"><label for="x-max">Longest call</label><div class="inline"><input type="number" step="0.5" id="x-max" name="audio.max_vocalization_duration" data-type="float"><span class="unit">seconds</span></div><div class="hint">Longer sounds are split.</div><div class="err"></div></div>
+            <div class="field"><label for="x-sil">Gap that ends a call</label><div class="inline"><input type="number" step="0.05" id="x-sil" name="audio.silence_duration" data-type="float"><span class="unit">seconds</span></div><div class="err"></div></div>
+          </div>
+          <div class="formbar"><button class="btn primary" type="submit" disabled>Save detection settings</button><span class="status"></span></div>
+        </form>
+        <form class="card span-12" data-form>
+          <h2>Audio capture</h2>
+          <p class="help">Applies the next time monitoring starts.</p>
+          <div class="fields">
+            <div class="field"><label for="a-sr">Sample rate</label><select id="a-sr" name="audio.sample_rate" data-type="int"><option value="16000">16 kHz</option><option value="22050">22.05 kHz</option><option value="32000">32 kHz</option><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select><div class="err"></div></div>
+            <div class="field"><label for="a-ch">Channels</label><select id="a-ch" name="audio.channels" data-type="int"><option value="1">1 (mono)</option><option value="2">2 (I²S stereo frame)</option></select><div class="hint">The INMP441 needs 2.</div><div class="err"></div></div>
+            <div class="field"><label for="a-chunk">Processing block</label><div class="inline"><input type="number" step="0.1" id="a-chunk" name="audio.chunk_duration" data-type="float"><span class="unit">seconds</span></div><div class="err"></div></div>
+            <div class="field"><label for="a-msr">Model sample rate</label><select id="a-msr" name="model.sample_rate" data-type="int"><option value="16000">16 kHz</option><option value="22050">22.05 kHz</option><option value="32000">32 kHz</option><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select><div class="hint">The rate the AI model was trained on (its training clips are 16 kHz). Audio is resampled to this. Needs a service restart.</div><div class="err"></div></div>
+          </div>
+          <div class="formbar"><button class="btn primary" type="submit" disabled>Save audio settings</button><span class="status"></span></div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ======================= WIFI ======================= -->
+    <section class="page" id="page-wifi">
+      <div class="grid">
+        <div class="card span-5">
+          <h2>Current connection</h2>
+          <dl class="kv"><dt>Network</dt><dd id="wSsid">—</dd><dt>IP address</dt><dd id="wIp">—</dd><dt>Manager</dt><dd id="wMgr">—</dd></dl>
+          <div class="formbar" style="border:0;padding-top:4px"><button class="btn" type="button" id="scanBtn">Scan for networks</button></div>
+          <div class="nets" id="nets"></div>
+        </div>
+        <form class="card span-7" id="wifiForm" autocomplete="off">
+          <h2>Join a network</h2>
+          <p class="help">⚠️ If you're connected to the Pi over WiFi, switching networks will drop this page and your SSH session. Reconnect using the Pi's address on the new network.</p>
+          <div class="fields">
+            <div class="field full"><label for="w-ssid">Network name (SSID)</label><input type="text" id="w-ssid" name="wifi.ssid"><div class="err"></div></div>
+            <div class="field full"><label for="w-pw">Password</label><input type="password" id="w-pw" name="wifi.password" autocomplete="new-password"><div class="hint" id="w-pw-hint"></div><div class="err"></div></div>
+          </div>
+          <div class="formbar"><button class="btn primary" type="submit">Connect</button><span class="status"></span></div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ======================= CLOCK ======================= -->
+    <section class="page" id="page-clock">
+      <div class="grid">
+        <div class="card span-4"><h2>Pi real-time clock</h2><div class="clockface" id="cRtc">—</div><div class="hint" id="cRtcSub"></div></div>
+        <div class="card span-4"><h2>Pi system clock</h2><div class="clockface" id="cSys">—</div><div class="hint" id="cSysSub"></div></div>
+        <div class="card span-4"><h2>This computer</h2><div class="clockface" id="cPc">—</div><div class="hint" id="cPcSub"></div></div>
+        <div class="card span-12">
+          <h2>Set the time</h2>
+          <p class="help">The schedule runs off the DS3231 clock, which keeps time without power or internet. The Pi stores local time, so use a computer in the same time zone as the bats.</p>
+          <div class="formbar" style="border:0;margin-top:0;padding-top:0;flex-wrap:wrap">
+            <button class="btn primary" type="button" id="syncClockBtn">Set Pi clock to this computer's time</button>
+            <span class="unit">or</span>
+            <input type="datetime-local" id="manualDt" step="1" style="max-width:240px">
+            <button class="btn" type="button" id="setClockBtn">Set</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= SYSTEM ======================= -->
+    <section class="page" id="page-system">
+      <div class="grid">
+        <form class="card span-6" data-form>
+          <h2>General</h2>
+          <div class="fields">
+            <div class="field full"><label for="y-log">Log detail</label><select id="y-log" name="system.log_level"><option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option></select><div class="hint">DEBUG logs every classification.</div><div class="err"></div></div>
+            <div class="field"><label for="y-ra">Email attempts</label><input type="number" id="y-ra" name="system.email_retry_attempts" data-type="int" min="1" max="20"><div class="err"></div></div>
+            <div class="field"><label for="y-rd">Wait between attempts</label><div class="inline"><input type="number" id="y-rd" name="system.email_retry_delay" data-type="int" min="5" max="3600"><span class="unit">seconds</span></div><div class="err"></div></div>
+          </div>
+          <div class="formbar"><button class="btn primary" type="submit" disabled>Save</button><span class="status"></span></div>
+        </form>
+        <form class="card span-6" data-form>
+          <h2>This settings page</h2>
+          <div class="fields">
+            <div class="field"><label for="y-host">Listen address</label><input type="text" id="y-host" name="web.host"><div class="hint">127.0.0.1 = SSH tunnel only (recommended). 0.0.0.0 = anyone on the network, no password.</div><div class="err"></div></div>
+            <div class="field"><label for="y-port">Port</label><input type="number" id="y-port" name="web.port" data-type="int" min="1024" max="65535"><div class="err"></div></div>
+          </div>
+          <div class="formbar"><button class="btn primary" type="submit" disabled>Save</button><span class="status"></span></div>
+        </form>
+        <div class="card span-12">
+          <h2>Connecting from your computer</h2>
+          <p class="help" style="margin-bottom:6px">Open a tunnel (keep that terminal open), then browse to <b>http://localhost:<span class="portv">8080</span></b>:</p>
+          <code class="cmd">ssh -L <span class="portv">8080</span>:localhost:<span class="portv">8080</span> pi@<span id="hostv">raspberrypi</span>.local</code>
+          <p class="help" style="margin:10px 0 6px">Useful commands on the Pi:</p>
+          <code class="cmd">sudo systemctl restart bat-monitor</code>
+          <code class="cmd">journalctl -u bat-monitor -f</code>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= LOGS ======================= -->
+    <section class="page" id="page-logs">
+      <div class="card">
+        <div class="toolbar">
+          <div class="seg" id="logLevel"><button type="button" data-l="ALL" aria-pressed="true">All</button><button type="button" data-l="INFO">Info+</button><button type="button" data-l="WARNING">Warnings</button><button type="button" data-l="ERROR">Errors</button></div>
+          <input type="text" id="logFilter" placeholder="Filter…" aria-label="Filter log lines">
+          <span class="spacer" style="flex:1"></span>
+          <label class="switch"><input type="checkbox" id="logAuto" checked> <span>Live</span></label>
+          <button class="btn small" type="button" id="logRefresh">Refresh</button>
+        </div>
+        <div class="logs" id="logBox">Loading…</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<dialog id="confirmDlg"><h3 id="cfTitle"></h3><p id="cfText"></p><div class="actions"><button class="btn" value="cancel" id="cfNo">Cancel</button><button class="btn primary" id="cfYes">Confirm</button></div></dialog>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+
+const CLASS_INFO = {
+  Rods_Fighting:    { label: "Rods · Fighting",    color: "var(--c1)" },
+  Straws_Fighting:  { label: "Straws · Fighting",  color: "var(--c2)" },
+  Straws_Talking:   { label: "Straws · Talking",   color: "var(--c3)" },
+  Straws_Want_Food: { label: "Straws · Want food", color: "var(--c4)" },
+};
+const classInfo = c => CLASS_INFO[c] || { label: String(c).replace(/_/g, " "), color: "var(--faint)" };
+
+let CONFIG = null;
+let STATUS = null;
+
+/* ---------------- helpers ---------------- */
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  let data = {};
+  try { data = await res.json(); } catch (_) { /* non-JSON */ }
+  if (!res.ok && !data.errors) throw new Error(data.error || `${res.status} ${res.statusText}`);
+  return data;
+}
+function toast(msg, kind = "info", ms = 4200) {
+  const t = document.createElement("div");
+  t.className = `toast ${kind}`;
+  t.textContent = msg;
+  $("#toasts").append(t);
+  setTimeout(() => { t.style.transition = "opacity .3s"; t.style.opacity = "0"; setTimeout(() => t.remove(), 300); }, ms);
+}
+function confirmDialog(title, text, yes = "Confirm", danger = false) {
+  return new Promise(resolve => {
+    const d = $("#confirmDlg");
+    $("#cfTitle").textContent = title; $("#cfText").textContent = text;
+    const y = $("#cfYes"); y.textContent = yes; y.className = "btn " + (danger ? "danger" : "primary");
+    const done = v => { d.close(); resolve(v); };
+    y.onclick = () => done(true); $("#cfNo").onclick = () => done(false);
+    d.oncancel = () => resolve(false);
+    d.showModal();
+  });
+}
+async function busy(btn, fn) {
+  const html = btn.innerHTML; btn.disabled = true;
+  btn.innerHTML = `<span class="spin"></span>${btn.textContent}`;
+  try { return await fn(); } finally { btn.innerHTML = html; btn.disabled = false; }
+}
+const pad = n => String(n).padStart(2, "0");
+function fmtDur(s) {
+  if (s == null) return "—";
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  if (h) return `${h}h ${pad(m)}m`;
+  if (m) return `${m}m ${pad(s % 60)}s`;
+  return `${s}s`;
+}
+const fmtTime = iso => iso ? iso.slice(11, 16) : "—";
+const toDb = v => v > 0 ? 20 * Math.log10(v) : -120;
+const dbPct = db => Math.max(0, Math.min(100, (db + 100)));  // -100..0 dB -> 0..100%
+const fmtDb = v => v > 0 ? `${toDb(v).toFixed(0)} dB` : "—";
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/* ---------------- navigation ---------------- */
+const TITLES = { dashboard: "Dashboard", schedule: "Schedule", email: "Email & reports", detection: "Detection", wifi: "WiFi", clock: "Clock", system: "System", logs: "Logs" };
+function showPage(name) {
+  if (!TITLES[name]) name = "dashboard";
+  $$(".page").forEach(p => p.classList.toggle("active", p.id === "page-" + name));
+  $$("#nav button").forEach(b => b.setAttribute("aria-current", b.dataset.page === name));
+  $("#pageTitle").textContent = TITLES[name];
+  if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
+  if (name === "logs") loadLogs();
+  if (name === "wifi") loadWifi();
+}
+$$("#nav button").forEach(b => b.onclick = () => showPage(b.dataset.page));
+window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
+
+/* theme toggle */
+const THEMES = ["auto", "dark", "light"];
+function applyTheme(t) {
+  if (t === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.dataset.theme = t;
+  $("#themeBtn").textContent = "Theme: " + t;
+}
+let theme = "auto";
+try { theme = localStorage.getItem("batTheme") || "auto"; } catch (_) {}
+applyTheme(theme);
+$("#themeBtn").onclick = () => {
+  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  applyTheme(theme);
+  try { localStorage.setItem("batTheme", theme); } catch (_) {}
+};
+
+/* ---------------- settings forms ---------------- */
+const getPath = (obj, path) => path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+
+function readField(el) {
+  if (el.type === "checkbox") return el.checked;
+  const t = el.dataset.type;
+  if (t === "int") return el.value === "" ? null : parseInt(el.value, 10);
+  if (t === "float") return el.value === "" ? null : parseFloat(el.value);
+  return el.value;
+}
+function readForm(form) {
+  const out = {};
+  $$("[name]", form).forEach(el => {
+    if (el.hasAttribute("data-secret") && el.value === "") return;  // keep saved secret
+    const [sec, key] = el.name.split(".");
+    (out[sec] ||= {})[key] = readField(el);
+  });
+  $$("[data-chips]", form).forEach(box => {
+    const [sec, key] = box.dataset.chips.split(".");
+    (out[sec] ||= {})[key] = box._items.slice();
+  });
+  return out;
+}
+function fillForm(form) {
+  $$("[name]", form).forEach(el => {
+    if (el.hasAttribute("data-secret")) {
+      el.value = "";
+      const isSet = getPath(CONFIG, el.name + "_set");
+      el.placeholder = isSet ? "•••••••• saved" : "not set";
+      const hint = $("[data-secret-hint]", el.closest(".field"));
+      if (hint) hint.textContent = isSet ? "Leave blank to keep the saved password." : "";
+      return;
+    }
+    const v = getPath(CONFIG, el.name);
+    if (el.type === "checkbox") el.checked = !!v;
+    else el.value = v ?? "";
+    el.dispatchEvent(new Event("sync"));
+  });
+  $$("[data-chips]", form).forEach(box => setChips(box, getPath(CONFIG, box.dataset.chips) || []));
+  form._base = JSON.stringify(readForm(form));
+  clearErrors(form);
+  updateDirty(form);
+}
+function updateDirty(form) {
+  const dirty = JSON.stringify(readForm(form)) !== form._base;
+  const btn = $("button[type=submit]", form), st = $(".formbar .status", form);
+  if (btn) btn.disabled = !dirty;
+  if (st) { st.textContent = dirty ? "Unsaved changes" : ""; st.classList.toggle("dirty", dirty); }
+  return dirty;
+}
+function clearErrors(form) { $$(".field.invalid", form).forEach(f => f.classList.remove("invalid")); }
+function showErrors(form, errors) {
+  clearErrors(form);
+  for (const [path, msg] of Object.entries(errors)) {
+    let field = $(`[name="${path}"]`, form)?.closest(".field") || $(`[data-chips="${path}"]`, form)?.closest(".field");
+    if (!field) { toast(`${path}: ${msg}`, "bad"); continue; }
+    field.classList.add("invalid");
+    $(".err", field).textContent = msg.charAt(0).toUpperCase() + msg.slice(1);
+  }
+}
+$$("form[data-form]").forEach(form => {
+  form.addEventListener("input", () => { clearErrors(form); updateDirty(form); });
+  form.addEventListener("change", () => updateDirty(form));
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const btn = $("button[type=submit]", form);
+    await busy(btn, async () => {
+      try {
+        const res = await api("/api/config", readForm(form));
+        if (res.errors) { showErrors(form, res.errors); toast("Please fix the highlighted fields", "bad"); return; }
+        CONFIG = res.config;
+        fillForm(form);
+        refreshDerived();
+        toast("Saved", "ok", 2200);
+        (res.notes || []).forEach(n => toast(n, "info", 6000));
+      } catch (err) { toast("Save failed: " + err.message, "bad"); }
+    });
+    updateDirty(form);
+  });
+});
+window.addEventListener("beforeunload", e => {
+  if ($$("form[data-form]").some(f => f._base && JSON.stringify(readForm(f)) !== f._base)) { e.preventDefault(); e.returnValue = ""; }
+});
+
+/* recipient chips */
+function setChips(box, items) {
+  box._items = items.slice();
+  $$(".chip", box).forEach(c => c.remove());
+  const input = $("input", box);
+  box._items.forEach((addr, i) => {
+    const c = document.createElement("span");
+    c.className = "chip";
+    c.innerHTML = `<span>${esc(addr)}</span><button type="button" aria-label="Remove ${esc(addr)}">✕</button>`;
+    $("button", c).onclick = () => { box._items.splice(i, 1); setChips(box, box._items); box.closest("form").dispatchEvent(new Event("input")); };
+    box.insertBefore(c, input);
+  });
+}
+$$("[data-chips]").forEach(box => {
+  const input = $("input", box);
+  const add = () => {
+    const v = input.value.trim().replace(/,$/, "");
+    if (!v) return;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { toast(`"${v}" doesn't look like an email address`, "bad"); return; }
+    if (!box._items.some(x => x.toLowerCase() === v.toLowerCase())) box._items.push(v);
+    input.value = "";
+    setChips(box, box._items);
+    box.closest("form").dispatchEvent(new Event("input"));
+  };
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); }
+    else if (e.key === "Backspace" && !input.value && box._items.length) { box._items.pop(); setChips(box, box._items); box.closest("form").dispatchEvent(new Event("input")); }
+  });
+  input.addEventListener("blur", add);
+  // Typing in the box shouldn't count as a change until the address is added
+  input.addEventListener("input", e => e.stopPropagation());
+  box.addEventListener("click", () => input.focus());
+});
+
+/* SMTP presets */
+$$("[data-preset]").forEach(b => b.onclick = () => {
+  const [h, p] = b.dataset.preset.split(":");
+  $("#e-host").value = h; $("#e-port").value = p;
+  b.closest("form").dispatchEvent(new Event("input"));
+});
+
+/* energy threshold: dB slider <-> linear number */
+const thrNum = $("#x-thr"), thrRange = $("#x-thr-range");
+function syncThrHint() {
+  const v = parseFloat(thrNum.value);
+  $("#x-thr-hint").textContent = v > 0 ? `RMS ${v.toPrecision(3)} ≈ ${toDb(v).toFixed(1)} dBFS` : "RMS level (0–1)";
+}
+thrNum.addEventListener("sync", () => { const v = parseFloat(thrNum.value); if (v > 0) thrRange.value = toDb(v).toFixed(1); syncThrHint(); });
+thrNum.addEventListener("input", () => { const v = parseFloat(thrNum.value); if (v > 0) thrRange.value = toDb(v); syncThrHint(); });
+thrRange.addEventListener("input", () => { thrNum.value = Number(Math.pow(10, thrRange.value / 20).toPrecision(3)); syncThrHint(); });
+const conf = $("#x-conf");
+const syncConf = () => $("#x-conf-v").textContent = Math.round(conf.value * 100) + "%";
+conf.addEventListener("input", syncConf); conf.addEventListener("sync", syncConf);
+
+/* trendline preview */
+function trendPreview() {
+  const m = parseFloat($("#t-m").value), b = parseFloat($("#t-b").value);
+  if (isNaN(m) || isNaN(b)) { $("#tPreview").textContent = "—"; return; }
+  $("#tPreview").textContent = [0, 5, 10, 20].map(x => `${x} calls/hr → ${(m * x + b).toFixed(1)}`).join("   ·   ");
+}
+$("#t-m").addEventListener("input", trendPreview); $("#t-b").addEventListener("input", trendPreview);
+$("#t-m").addEventListener("sync", trendPreview);
+
+/* schedule timeline */
+const minutes = t => { const [h, m] = (t || "0:0").split(":").map(Number); return h * 60 + m; };
+function drawTimeline() {
+  const tl = $("#tl"), a = minutes($("#s-start").value), b = minutes($("#s-stop").value);
+  tl.innerHTML = "";
+  const seg = (from, to) => { const d = document.createElement("div"); d.className = "win"; d.style.left = (from / 1440 * 100) + "%"; d.style.width = ((to - from) / 1440 * 100) + "%"; tl.append(d); };
+  let len;
+  if (a === b) { seg(0, 1440); len = 1440; }
+  else if (a < b) { seg(a, b); len = b - a; }
+  else { seg(a, 1440); seg(0, b); len = 1440 - a + b; }
+  const now = new Date(), n = now.getHours() * 60 + now.getMinutes();
+  const nd = document.createElement("div"); nd.className = "now"; nd.style.left = (n / 1440 * 100) + "%"; tl.append(nd);
+  const enabled = $("[name='schedule.enabled']").checked;
+  $("#tlSum").innerHTML = a === b
+    ? `Records <b>around the clock</b> (start and stop are the same).`
+    : `Records <b>${Math.floor(len / 60)}h${len % 60 ? " " + (len % 60) + "m" : ""}</b> every day, ${a > b ? "overnight " : ""}from <b>${$("#s-start").value}</b> to <b>${$("#s-stop").value}</b>.` + (enabled ? "" : ` <span style="color:var(--accent)">Schedule is off.</span>`);
+}
+["#s-start", "#s-stop"].forEach(s => { $(s).addEventListener("input", drawTimeline); $(s).addEventListener("sync", drawTimeline); });
+$("[name='schedule.enabled']").addEventListener("change", drawTimeline);
+
+function refreshDerived() {
+  const p = CONFIG?.web?.port || 8080;
+  $$(".portv").forEach(e => e.textContent = p);
+  $("#w-pw-hint").textContent = CONFIG?.wifi?.password_set ? "Leave blank to use the saved password for the saved network." : "";
+  if (!$("#w-ssid").value) $("#w-ssid").value = CONFIG?.wifi?.ssid || "";
+}
+
+async function loadConfig() {
+  CONFIG = await api("/api/config");
+  $$("form[data-form]").forEach(fillForm);
+  refreshDerived();
+  drawTimeline();
+}
+
+/* ---------------- status / dashboard ---------------- */
+function setMeter(prefix, a) {
+  const floor = $(`#${prefix}Floor`), loud = $(`#${prefix}Loud`), thr = $(`#${prefix}Thr`);
+  if (thr) thr.style.left = `calc(${dbPct(toDb(a.threshold))}% - 1px)`;
+  floor.style.width = a.fresh ? dbPct(toDb(a.floor)) + "%" : "0";
+  loud.style.width = a.fresh ? dbPct(toDb(a.loudest)) + "%" : "0";
+  const fv = $(`#${prefix}FloorV`), lv = $(`#${prefix}LoudV`), tv = $(`#${prefix}ThrV`);
+  if (fv) fv.textContent = a.fresh ? fmtDb(a.floor) : "—";
+  if (lv) lv.textContent = a.fresh ? fmtDb(a.loudest) : "—";
+  if (tv) tv.textContent = fmtDb(a.threshold);
+}
+function micPill(el, s) {
+  const a = s.audio || {};
+  if (!s.monitoring) { el.className = "pill"; el.innerHTML = `<span class="dot"></span>mic off`; }
+  else if (!a.fresh) { el.className = "pill warn"; el.innerHTML = `<span class="dot"></span>waiting for audio`; }
+  else if (a.loudest > a.threshold) { el.className = "pill live"; el.innerHTML = `<span class="dot"></span>sound detected`; }
+  else if (a.floor > a.threshold) { el.className = "pill bad"; el.innerHTML = `<span class="dot"></span>background above threshold`; }
+  else { el.className = "pill live"; el.innerHTML = `<span class="dot"></span>listening`; }
+}
+
+function renderStatus(s) {
+  STATUS = s;
+  $("#hostname").textContent = s.hostname || "";
+  $("#hostv").textContent = s.hostname || "raspberrypi";
+
+  const pill = $("#statePill"), mbtn = $("#monitorBtn");
+  if (!s.service_running) {
+    pill.className = "pill warn"; pill.innerHTML = `<span class="dot"></span>Settings only`;
+    mbtn.disabled = true; mbtn.textContent = "Monitor not running";
+    $("#modeBanner").textContent = s.message || "The monitor isn't running in this process. Settings you save here are used next time it starts.";
+    $("#modeBanner").classList.add("show");
+    return;
+  }
+  const sched = s.schedule || {};
+  if (s.monitoring) {
+    pill.className = "pill live";
+    pill.innerHTML = `<span class="dot"></span>${s.mode === "manual" ? "Monitoring (manual)" : "Monitoring"}`;
+    mbtn.className = "btn danger"; mbtn.textContent = "Stop monitoring";
+  } else {
+    pill.className = "pill"; pill.innerHTML = `<span class="dot"></span>Idle`;
+    mbtn.className = "btn go"; mbtn.textContent = "Start monitoring";
+  }
+  mbtn.disabled = false;
+
+  const banner = $("#modeBanner");
+  if (s.skip_window && !s.monitoring) { banner.textContent = "Stopped by hand — monitoring will resume with the next scheduled window."; banner.classList.add("show"); }
+  else if (sched.enabled === false) { banner.textContent = "The schedule is off: monitoring only runs when you start it."; banner.classList.add("show"); }
+  else banner.classList.remove("show");
+  const eb = $("#errBanner");
+  eb.textContent = s.last_error || ""; eb.classList.toggle("show", !!s.last_error);
+
+  // Tonight
+  const sess = s.session, last = s.last_session;
+  const src = sess || last;
+  $("#dTotal").textContent = src ? src.total : "—";
+  $("#dTotalSub").textContent = sess ? "vocalizations so far" : last ? `vocalizations last session (${fmtTime(last.start)}–${fmtTime(last.end)})` : "no session yet";
+  const counts = src ? src.by_class : {};
+  const max = Math.max(1, ...Object.values(counts));
+  $("#dBars").innerHTML = Object.keys(CLASS_INFO).concat(Object.keys(counts).filter(k => !CLASS_INFO[k])).map(k => {
+    const n = counts[k] || 0, ci = classInfo(k);
+    return `<div class="bar-row"><span class="name">${esc(ci.label)}</span><span class="track"><span class="fill" style="width:${n / max * 100}%;background:${ci.color}"></span></span><span class="n">${n}</span></div>`;
+  }).join("");
+
+  $("#dState").textContent = s.monitoring ? (s.mode === "manual" ? "Recording (manual)" : "Recording") : "Idle";
+  $("#dStart").textContent = sess ? fmtTime(sess.start) : "—";
+  $("#dDur").textContent = sess ? fmtDur(sess.duration_s) : "—";
+  if (s.monitoring && sched.time_until_stop != null) { $("#dNextLabel").textContent = "Stops in"; $("#dNext").textContent = `${fmtDur(sched.time_until_stop)} (${sched.stop_time})`; }
+  else if (!s.monitoring && sched.time_until_start != null) { $("#dNextLabel").textContent = "Starts in"; $("#dNext").textContent = `${fmtDur(sched.time_until_start)} (${sched.start_time})`; }
+  else { $("#dNextLabel").textContent = "Schedule"; $("#dNext").textContent = sched.enabled ? `${sched.start_time}–${sched.stop_time}` : "off"; }
+  $("#dSegs").textContent = sess ? sess.segments : "—";
+  $("#dLow").textContent = sess ? sess.low_confidence : "—";
+
+  // Food prediction
+  const m = CONFIG?.email?.trendline_slope ?? 0, b = CONFIG?.email?.trendline_intercept ?? 0;
+  if (sess) {
+    $("#dFood").textContent = (m * sess.want_food_rate + b).toFixed(1);
+    $("#dFormula").textContent = `${m} × ${sess.want_food_rate.toFixed(2)} calls/hr + ${b}`;
+  } else { $("#dFood").textContent = "—"; $("#dFormula").textContent = `${m} × (Want-food calls/hr) + ${b}`; }
+
+  // Mic
+  const a = s.audio || {};
+  setMeter("m", a); setMeter("m2", a);
+  micPill($("#dMicPill"), s); micPill($("#d2MicPill"), s);
+
+  // Recent
+  const rec = sess ? sess.recent : [];
+  $("#dRecent").innerHTML = rec.length ? rec.map(r => {
+    const ci = classInfo(r.class);
+    return `<tr><td>${esc(r.time)}</td><td><span class="tag"><i style="background:${ci.color}"></i>${esc(ci.label)}</span></td><td style="text-align:right">${(r.confidence * 100).toFixed(0)}%</td></tr>`;
+  }).join("") : `<tr><td colspan="3" class="empty">${s.monitoring ? "Listening — nothing detected yet" : "Not monitoring"}</td></tr>`;
+  $("#dLast").textContent = rec.length ? `last at ${rec[0].time}` : "";
+
+  // Health
+  const c = s.clock || {}, h = s.system || {}, e = s.email || {};
+  $("#hClock").innerHTML = c.rtc_present ? (c.rtc_error ? `<span style="color:var(--bad)">RTC error</span>` : "DS3231 RTC") : `<span style="color:var(--accent)">system clock (no RTC)</span>`;
+  $("#hRtcT").textContent = c.rtc_temp_c != null ? `${c.rtc_temp_c.toFixed(1)} °C` : "—";
+  $("#hCpu").textContent = h.cpu_temp_c != null ? `${h.cpu_temp_c} °C` : "—";
+  $("#hMem").textContent = h.mem_used_pct != null ? `${h.mem_used_pct}% · ${h.load ?? "—"}` : "—";
+  $("#hDisk").textContent = h.disk_free_gb != null ? `${h.disk_free_gb} GB (${h.disk_used_pct}% used)` : "—";
+  $("#hEmail").innerHTML = !e.configured ? `<span style="color:var(--accent)">not set up</span>` : `${e.recipients} recipient${e.recipients === 1 ? "" : "s"}${e.queued ? ` · ${e.queued} queued` : ""}`;
+  $("#hUp").textContent = fmtDur(s.uptime_s);
+
+  renderClock();
+}
+
+let failures = 0;
+async function pollStatus() {
+  try {
+    renderStatus(await api("/api/status"));
+    failures = 0; $("#connBanner").classList.remove("show");
+  } catch (_) {
+    if (++failures >= 2) $("#connBanner").classList.add("show");
+  }
+}
+
+/* start / stop */
+$("#monitorBtn").onclick = async () => {
+  const btn = $("#monitorBtn");
+  const stopping = STATUS?.monitoring;
+  if (stopping) {
+    const inWindow = STATUS?.schedule?.is_within_schedule;
+    const ok = await confirmDialog("Stop monitoring?",
+      "This ends the current session and emails the report now." + (inWindow ? " It won't restart until the next scheduled window." : ""),
+      "Stop monitoring", true);
+    if (!ok) return;
+  }
+  await busy(btn, async () => {
+    try {
+      const r = await api("/api/monitor", { action: stopping ? "stop" : "start" });
+      if (r.ok) toast(stopping ? "Monitoring stopped" : "Monitoring started", "ok");
+      else toast(r.error || "Failed", "bad");
+    } catch (err) { toast(err.message, "bad"); }
+  });
+  pollStatus();
+};
+
+/* test email */
+$("#testEmailBtn").onclick = async () => {
+  const form = $("#testEmailBtn").closest("form");
+  if (updateDirty(form)) { toast("Save your email settings first", "info"); return; }
+  await busy($("#testEmailBtn"), async () => {
+    try {
+      const r = await api("/api/email/test", {});
+      r.ok ? toast(`Test email sent to ${CONFIG.email.recipients.length} recipient(s)`, "ok") : toast(r.error, "bad", 9000);
+    } catch (err) { toast(err.message, "bad"); }
+  });
+};
+
+/* ---------------- clock ---------------- */
+function localIso(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
+function renderClock() {
+  const now = new Date();
+  $("#cPc").innerHTML = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  $("#cPcSub").textContent = now.toDateString() + " · " + (Intl.DateTimeFormat().resolvedOptions().timeZone || "");
+  const c = STATUS?.clock;
+  if (!c) return;
+  const drift = iso => { const d = (new Date(iso) - now) / 1000; return Math.abs(d) < 2 ? "in sync with this computer" : `${d > 0 ? "ahead" : "behind"} by ${fmtDur(Math.abs(d))}`; };
+  if (c.rtc_time) { $("#cRtc").textContent = c.rtc_time.slice(11); $("#cRtcSub").textContent = c.rtc_time.slice(0, 10) + " · " + drift(c.rtc_time); }
+  else { $("#cRtc").textContent = "—"; $("#cRtcSub").textContent = c.rtc_error ? "Error: " + c.rtc_error : "No DS3231 detected — the system clock is used."; }
+  $("#cSys").textContent = c.system_time.slice(11);
+  $("#cSysSub").textContent = c.system_time.slice(0, 10) + " · " + drift(c.system_time);
+}
+async function setClock(iso, btn) {
+  await busy(btn, async () => {
+    try {
+      const r = await api("/api/clock", { datetime: iso });
+      toast(r.message || r.error || "Done", r.ok ? "ok" : "bad", 6000);
+    } catch (err) { toast(err.message, "bad"); }
+  });
+  pollStatus();
+}
+$("#syncClockBtn").onclick = e => setClock(localIso(new Date()), e.currentTarget);
+$("#setClockBtn").onclick = e => { const v = $("#manualDt").value; if (!v) { toast("Pick a date and time first", "info"); return; } setClock(v.length === 16 ? v + ":00" : v, e.currentTarget); };
+$("#manualDt").value = localIso(new Date());
+
+/* ---------------- wifi ---------------- */
+async function loadWifi() {
+  try {
+    const w = await api("/api/wifi");
+    $("#wSsid").textContent = w.current.ssid || "not connected";
+    $("#wIp").textContent = w.current.ip || "—";
+    $("#wMgr").textContent = w.networkmanager ? "NetworkManager" : "wpa_supplicant";
+  } catch (err) { $("#wSsid").textContent = "unavailable"; }
+}
+$("#scanBtn").onclick = e => busy(e.currentTarget, async () => {
+  try {
+    const { networks } = await api("/api/wifi/scan");
+    const box = $("#nets");
+    if (!networks.length) { box.innerHTML = `<div class="empty">No networks found (scanning needs NetworkManager).</div>`; return; }
+    box.innerHTML = "";
+    networks.forEach(n => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "net";
+      const lvl = Math.ceil(n.signal / 25);
+      b.innerHTML = `<span class="sig">${[1, 2, 3, 4].map(i => `<i class="${i <= lvl ? "on" : ""}" style="height:${i * 25}%"></i>`).join("")}</span><span class="ssid">${esc(n.ssid)}</span><span class="unit">${n.secure ? "🔒" : "open"} ${n.signal}%</span>`;
+      b.onclick = () => { $("#w-ssid").value = n.ssid; $("#w-pw").value = ""; $("#w-pw").focus(); };
+      box.append(b);
+    });
+  } catch (err) { toast("Scan failed: " + err.message, "bad"); }
+});
+$("#wifiForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const form = e.currentTarget, ssid = $("#w-ssid").value.trim(), pw = $("#w-pw").value;
+  if (!ssid) { showErrors(form, { "wifi.ssid": "enter a network name" }); return; }
+  const ok = await confirmDialog(`Connect to “${ssid}”?`, "If this page is reached over WiFi it will disconnect; reconnect on the new network afterwards.", "Connect");
+  if (!ok) return;
+  await busy($("button[type=submit]", form), async () => {
+    try {
+      const body = { ssid }; if (pw) body.password = pw;
+      const r = await api("/api/wifi/connect", body);
+      if (r.errors) showErrors(form, r.errors);
+      else if (r.ok) { toast(`Connected to ${ssid}`, "ok"); $("#w-pw").value = ""; loadWifi(); CONFIG = await api("/api/config"); refreshDerived(); }
+      else toast(r.error, "bad", 9000);
+    } catch (err) { toast("Connection lost — if the Pi switched networks, reconnect to it there.", "info", 9000); }
+  });
+});
+
+/* ---------------- logs ---------------- */
+let logLevel = "ALL";
+const RANK = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3, CRITICAL: 4 };
+let logLines = [];
+function renderLogs() {
+  const box = $("#logBox"), q = $("#logFilter").value.toLowerCase();
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const min = logLevel === "ALL" ? -1 : RANK[logLevel];
+  const html = logLines.map(line => {
+    const m = line.match(/ - (DEBUG|INFO|WARNING|ERROR|CRITICAL) - /);
+    const lvl = m ? m[1] : "INFO";
+    if (RANK[lvl] < min) return null;
+    if (q && !line.toLowerCase().includes(q)) return null;
+    let t = esc(line);
+    if (q) t = t.replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), x => `<mark>${x}</mark>`);
+    return `<div class="${lvl}">${t}</div>`;
+  }).filter(Boolean);
+  box.innerHTML = html.length ? html.join("") : `<div class="empty">No log lines${q || min > 0 ? " match" : " yet"}.</div>`;
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+async function loadLogs() {
+  try { logLines = (await api("/api/logs?lines=600")).lines; renderLogs(); }
+  catch (err) { $("#logBox").textContent = "Could not load logs: " + err.message; }
+}
+$$("#logLevel button").forEach(b => b.onclick = () => {
+  logLevel = b.dataset.l;
+  $$("#logLevel button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  renderLogs();
+});
+$("#logFilter").addEventListener("input", renderLogs);
+$("#logRefresh").onclick = loadLogs;
+
+/* ---------------- boot ---------------- */
+showPage(location.hash.slice(1) || "dashboard");
+loadConfig().then(pollStatus).catch(err => { $("#connBanner").classList.add("show"); toast("Could not load settings: " + err.message, "bad"); });
+setInterval(pollStatus, 2000);
+setInterval(renderClock, 1000);
+setInterval(drawTimeline, 60000);
+setInterval(() => { if ($("#page-logs").classList.contains("active") && $("#logAuto").checked) loadLogs(); }, 3000);
+</script>
+</body>
+</html>

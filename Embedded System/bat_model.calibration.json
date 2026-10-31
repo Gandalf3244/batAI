@@ -1,0 +1,12 @@
+{
+  "model_sha1": "7a2f1fedbcd6e4da50e0005430de3161f08b566d",
+  "class_bias": {
+    "Rods_Fighting": 0.75,
+    "Straws_Fighting": 0.0,
+    "Straws_Talking": 0.0,
+    "Straws_Want_Food": 0.75
+  },
+  "confidence_threshold": 0.6,
+  "fitted_on": "997 clips x 3 volumes, honest predictions of a 4-model ensemble",
+  "note": "Log-probability offsets applied by model_inference.py before choosing the top class. Delete this file to turn the correction off."
+}

@@ -1,0 +1,36 @@
+{
+  "model_type": "cnn1d",
+  "settings": {
+    "filters": 64,
+    "layers": 2,
+    "kernel": 3,
+    "dropout": 0.3,
+    "l2": 0.0001,
+    "lr": 0.0005,
+    "epochs": 20,
+    "specaug": true,
+    "noise": 0.05
+  },
+  "ensemble_size": 5,
+  "classes": [
+    "Rods_Fighting",
+    "Straws_Fighting",
+    "Straws_Talking",
+    "Straws_Want_Food"
+  ],
+  "sample_rate": 16000,
+  "max_length": 451,
+  "n_mels": 120,
+  "n_fft": 2048,
+  "hop_length": 512,
+  "input_shape": [
+    1,
+    451,
+    360
+  ],
+  "unseen_night_balanced_accuracy": 0.5467,
+  "estimated_pi_seconds_per_sound": 0.041,
+  "trained_on_clips": 997,
+  "budget": "high",
+  "quick_test": false
+}

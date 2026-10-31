@@ -14,6 +14,8 @@ smbus2: Any = _smbus2
 
 from datetime import datetime, time as dt_time, timedelta
 import logging
+import subprocess
+import threading
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,6 +57,8 @@ class DS3231:
         """
         self.bus_number = bus_number
         self.bus: Optional[Any] = None
+        # The main loop, TFT UI and web UI all read the clock from different threads
+        self._lock = threading.Lock()
         if smbus2 is None:
             raise RuntimeError("smbus2 is not installed")
         
@@ -84,16 +88,25 @@ class DS3231:
             raise RuntimeError("DS3231 bus is not initialized")
 
         try:
-            # Read time registers
-            seconds = self._bcd_to_dec(self.bus.read_byte_data(self.ADDRESS, self.REG_SECONDS))
-            minutes = self._bcd_to_dec(self.bus.read_byte_data(self.ADDRESS, self.REG_MINUTES))
-            hours = self._bcd_to_dec(self.bus.read_byte_data(self.ADDRESS, self.REG_HOURS) & 0x3F)
-            
-            # Read date registers
-            date = self._bcd_to_dec(self.bus.read_byte_data(self.ADDRESS, self.REG_DATE))
-            month = self._bcd_to_dec(self.bus.read_byte_data(self.ADDRESS, self.REG_MONTH) & 0x1F)
-            year = self._bcd_to_dec(self.bus.read_byte_data(self.ADDRESS, self.REG_YEAR)) + 2000
-            
+            # Read all time/date registers in one transaction: the DS3231 latches
+            # them for a block read, so the values can't roll over mid-read
+            # (e.g. 05:59:59 being read back as 06:59:59).
+            with self._lock:
+                regs = self.bus.read_i2c_block_data(self.ADDRESS, self.REG_SECONDS, 7)
+
+            seconds = self._bcd_to_dec(regs[0] & 0x7F)
+            minutes = self._bcd_to_dec(regs[1] & 0x7F)
+            hour_reg = regs[2]
+            if hour_reg & 0x40:
+                # 12-hour mode (bit 5 = PM)
+                hours = self._bcd_to_dec(hour_reg & 0x1F) % 12 + (12 if hour_reg & 0x20 else 0)
+            else:
+                hours = self._bcd_to_dec(hour_reg & 0x3F)
+
+            date = self._bcd_to_dec(regs[4] & 0x3F)
+            month = self._bcd_to_dec(regs[5] & 0x1F)
+            year = self._bcd_to_dec(regs[6]) + 2000
+
             return datetime(year, month, date, hours, minutes, seconds)
         
         except Exception as e:
@@ -111,13 +124,21 @@ class DS3231:
             raise RuntimeError("DS3231 bus is not initialized")
 
         try:
-            self.bus.write_byte_data(self.ADDRESS, self.REG_SECONDS, self._dec_to_bcd(dt.second))
-            self.bus.write_byte_data(self.ADDRESS, self.REG_MINUTES, self._dec_to_bcd(dt.minute))
-            self.bus.write_byte_data(self.ADDRESS, self.REG_HOURS, self._dec_to_bcd(dt.hour))
-            self.bus.write_byte_data(self.ADDRESS, self.REG_DAY, self._dec_to_bcd(dt.weekday() + 1))
-            self.bus.write_byte_data(self.ADDRESS, self.REG_DATE, self._dec_to_bcd(dt.day))
-            self.bus.write_byte_data(self.ADDRESS, self.REG_MONTH, self._dec_to_bcd(dt.month))
-            self.bus.write_byte_data(self.ADDRESS, self.REG_YEAR, self._dec_to_bcd(dt.year - 2000))
+            # Write all registers at once (24-hour mode) so the clock never holds a half-set time
+            regs = [
+                self._dec_to_bcd(dt.second),
+                self._dec_to_bcd(dt.minute),
+                self._dec_to_bcd(dt.hour),
+                self._dec_to_bcd(dt.weekday() + 1),
+                self._dec_to_bcd(dt.day),
+                self._dec_to_bcd(dt.month),
+                self._dec_to_bcd(dt.year - 2000),
+            ]
+            with self._lock:
+                self.bus.write_i2c_block_data(self.ADDRESS, self.REG_SECONDS, regs)
+                # Clear the oscillator-stop flag so the time is marked valid
+                status = self.bus.read_byte_data(self.ADDRESS, self.REG_STATUS)
+                self.bus.write_byte_data(self.ADDRESS, self.REG_STATUS, status & 0x7F)
             
             logger.info(f"RTC time set to: {dt}")
         
@@ -137,8 +158,8 @@ class DS3231:
             return 0.0
 
         try:
-            msb = self.bus.read_byte_data(self.ADDRESS, self.REG_TEMP_MSB)
-            lsb = self.bus.read_byte_data(self.ADDRESS, self.REG_TEMP_MSB + 1)
+            with self._lock:
+                msb, lsb = self.bus.read_i2c_block_data(self.ADDRESS, self.REG_TEMP_MSB, 2)
             
             # Temperature is in MSB and upper 2 bits of LSB
             temp = msb + ((lsb >> 6) * 0.25)
@@ -156,14 +177,7 @@ class DS3231:
     def sync_system_time(self):
         """Sync system time with RTC (requires root privileges)."""
         try:
-            import subprocess
-            rtc_time = self.get_datetime()
-            time_str = rtc_time.strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Set system time (requires sudo)
-            subprocess.run(['sudo', 'date', '-s', time_str], check=True)
-            logger.info(f"System time synced with RTC: {time_str}")
-        
+            set_system_time(self.get_datetime())
         except Exception as e:
             logger.error(f"Failed to sync system time: {e}")
     
@@ -171,6 +185,16 @@ class DS3231:
         """Close I2C bus."""
         if self.bus:
             self.bus.close()
+            self.bus = None
+
+
+def set_system_time(dt: datetime):
+    """Set the Linux system clock (needs root or passwordless sudo)."""
+    time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+    # -n: fail instead of hanging on a password prompt when running as a service
+    subprocess.run(['sudo', '-n', 'date', '-s', time_str], check=True,
+                   capture_output=True, timeout=10)
+    logger.info(f"System time set to: {time_str}")
 
 
 class ScheduleManager:
@@ -183,14 +207,35 @@ class ScheduleManager:
         Initialize schedule manager.
         
         Args:
-            rtc: DS3231 instance (creates new one if None)
+            rtc: DS3231 instance, or None to use the system clock
         """
-        self.rtc = rtc or DS3231()
+        self.rtc = rtc
         self.start_time: Optional[dt_time] = None
         self.stop_time: Optional[dt_time] = None
         self.enabled = False
-        
-        logger.info("Schedule manager initialized")
+        self._rtc_failed = False
+
+        logger.info("Schedule manager initialized" + ("" if rtc else " (using system clock)"))
+
+    def now(self) -> datetime:
+        """Current time from the RTC, falling back to the system clock if the RTC can't be read."""
+        if self.rtc is not None:
+            try:
+                current = self.rtc.get_datetime()
+                if self._rtc_failed:
+                    logger.info("RTC readable again")
+                    self._rtc_failed = False
+                return current
+            except Exception as e:
+                if not self._rtc_failed:
+                    logger.warning(f"RTC read failed ({e}); using system clock until it recovers")
+                    self._rtc_failed = True
+        return datetime.now()
+
+    @property
+    def clock_source(self) -> str:
+        """'rtc' or 'system' - where the schedule's time currently comes from."""
+        return "rtc" if self.rtc is not None and not self._rtc_failed else "system"
     
     def set_schedule(self, start_time: str, stop_time: str, enabled: bool = True):
         """
@@ -204,10 +249,10 @@ class ScheduleManager:
         # Parse times
         start_parts = start_time.split(':')
         stop_parts = stop_time.split(':')
-        
+
         self.start_time = dt_time(int(start_parts[0]), int(start_parts[1]))
         self.stop_time = dt_time(int(stop_parts[0]), int(stop_parts[1]))
-        self.enabled = enabled
+        self.enabled = bool(enabled)
         
         logger.info(f"Schedule set: {start_time} - {stop_time} (enabled={enabled})")
     
@@ -218,20 +263,22 @@ class ScheduleManager:
         Returns:
             True if should be recording, False otherwise
         """
-        if not self.enabled or not self.start_time or not self.stop_time:
+        if not self.enabled or self.start_time is None or self.stop_time is None:
             return False
-        
+
         # Get current time from RTC
-        current_dt = self.rtc.get_datetime()
-        current_time = current_dt.time()
-        
-        # Handle schedules that cross midnight
-        if self.start_time <= self.stop_time:
+        current_time = self.now().time()
+
+        # Window is [start, stop): recording ends as soon as the stop minute begins
+        if self.start_time < self.stop_time:
             # Normal schedule (e.g., 08:00 - 17:00)
-            return self.start_time <= current_time <= self.stop_time
-        else:
+            return self.start_time <= current_time < self.stop_time
+        elif self.start_time > self.stop_time:
             # Crosses midnight (e.g., 18:00 - 06:00)
-            return current_time >= self.start_time or current_time <= self.stop_time
+            return current_time >= self.start_time or current_time < self.stop_time
+        else:
+            # Start == stop: treat as "record around the clock"
+            return True
     
     def get_time_until_start(self) -> Optional[int]:
         """
@@ -240,13 +287,13 @@ class ScheduleManager:
         Returns:
             Seconds until start, or None if within schedule or disabled
         """
-        if not self.enabled or not self.start_time:
+        if not self.enabled or self.start_time is None:
             return None
-        
+
         if self.is_within_schedule():
             return None
-        
-        current_dt = self.rtc.get_datetime()
+
+        current_dt = self.now()
         current_time = current_dt.time()
         
         # Calculate next start datetime
@@ -267,29 +314,18 @@ class ScheduleManager:
         Returns:
             Seconds until stop, or None if not within schedule or disabled
         """
-        if not self.enabled or not self.start_time or not self.stop_time:
+        if not self.enabled or self.start_time is None or self.stop_time is None:
             return None
-        
-        if not self.is_within_schedule():
+
+        if not self.is_within_schedule() or self.start_time == self.stop_time:
             return None
-        
-        current_dt = self.rtc.get_datetime()
-        current_time = current_dt.time()
-        
-        # Calculate next stop datetime
+
+        current_dt = self.now()
+
+        # Next occurrence of the stop time
         stop_dt = datetime.combine(current_dt.date(), self.stop_time)
-        
-        # If schedule crosses midnight and we're before midnight
-        if self.start_time > self.stop_time and current_time >= self.start_time:
+        if stop_dt <= current_dt:
             stop_dt = stop_dt + timedelta(days=1)
-        
-        # If stop time has passed today but we're still in schedule (crossed midnight)
-        if current_time > self.stop_time and self.start_time > self.stop_time:
-            # We're past midnight, stop_dt is already correct
-            pass
-        elif current_time < self.stop_time:
-            # Normal case, stop is later today
-            pass
         
         # Calculate difference
         diff = stop_dt - current_dt
@@ -304,7 +340,8 @@ class ScheduleManager:
             'is_within_schedule': self.is_within_schedule(),
             'time_until_start': self.get_time_until_start(),
             'time_until_stop': self.get_time_until_stop(),
-            'current_time': self.rtc.get_datetime().strftime('%Y-%m-%d %H:%M:%S')
+            'current_time': self.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'clock_source': self.clock_source
         }
 
 

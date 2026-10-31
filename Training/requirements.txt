@@ -1,0 +1,10 @@
+# For training on a desktop computer (not the Pi).
+# Python 3.10 - 3.12 (Ubuntu 22.04 and 24.04 system Python both work).
+tensorflow>=2.16
+numpy
+scipy
+pandas
+openpyxl          # reads the .xlsx spreadsheet
+scikit-learn
+librosa
+soundfile
