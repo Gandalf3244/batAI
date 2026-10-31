@@ -1,0 +1,35 @@
+# Python dependencies for Bat Activity Monitoring System (runs on the Pi)
+# Raspberry Pi Zero 2 W - install.sh installs these into ./venv
+# (Training/conversion scripts in "Everything else" need full TensorFlow
+#  on a desktop computer and are not listed here.)
+
+# Core scientific computing
+numpy
+
+# TFLite runtime for model inference (model_inference.py also accepts
+# tflite-runtime or tensorflow if one of those is installed instead)
+ai-edge-litert
+
+# Audio processing
+sounddevice
+soundfile
+librosa
+
+# Visualization (needs >= 3.6 for matplotlib.colormaps) and the label encoder
+matplotlib>=3.6
+scikit-learn
+
+# Hardware interfaces
+smbus2
+adafruit-circuitpython-rgb-display
+Adafruit-Blinka
+spidev
+RPi.GPIO
+
+# Image processing (TFT display)
+Pillow
+
+# Terminal control panel (batmon.py) - opens when you SSH in
+textual
+
+# The monitor's local control port (web_ui.py) uses only the Python standard library.

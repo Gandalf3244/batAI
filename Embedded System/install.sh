@@ -24,6 +24,14 @@ INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Installation directory: $INSTALL_DIR"
 echo ""
 
+# Raspberry Pi OS Bookworm+ moved config.txt to /boot/firmware
+if [ -f /boot/firmware/config.txt ]; then
+    BOOT_CONFIG=/boot/firmware/config.txt
+else
+    BOOT_CONFIG=/boot/config.txt
+fi
+echo "Boot config: $BOOT_CONFIG"
+
 # Update system
 echo "Step 1: Updating system packages..."
 apt-get update
@@ -55,8 +63,8 @@ apt-get install -y \
 # Enable I2C
 echo ""
 echo "Step 3: Enabling I2C interface..."
-if ! grep -q "^dtparam=i2c_arm=on" /boot/config.txt; then
-    echo "dtparam=i2c_arm=on" >> /boot/config.txt
+if ! grep -q "^dtparam=i2c_arm=on" "$BOOT_CONFIG"; then
+    echo "dtparam=i2c_arm=on" >> "$BOOT_CONFIG"
     echo "I2C enabled (reboot required)"
 else
     echo "I2C already enabled"
@@ -70,8 +78,8 @@ fi
 # Enable SPI for TFT display
 echo ""
 echo "Step 3b: Enabling SPI interface for TFT display..."
-if ! grep -q "^dtparam=spi=on" /boot/config.txt; then
-    echo "dtparam=spi=on" >> /boot/config.txt
+if ! grep -q "^dtparam=spi=on" "$BOOT_CONFIG"; then
+    echo "dtparam=spi=on" >> "$BOOT_CONFIG"
     echo "SPI enabled (reboot required)"
 else
     echo "SPI already enabled"
@@ -80,9 +88,14 @@ fi
 # Configure I2S audio
 echo ""
 echo "Step 4: Configuring I2S audio..."
-if ! grep -q "^dtoverlay=i2s-mmap" /boot/config.txt; then
-    echo "dtoverlay=i2s-mmap" >> /boot/config.txt
-    echo "I2S overlay added (reboot required)"
+# The INMP441 shows up as a capture device through the googlevoicehat overlay
+# (i2s-mmap alone does not create a sound card).
+if ! grep -q "^dtparam=i2s=on" "$BOOT_CONFIG"; then
+    echo "dtparam=i2s=on" >> "$BOOT_CONFIG"
+fi
+if ! grep -q "^dtoverlay=googlevoicehat-soundcard" "$BOOT_CONFIG"; then
+    echo "dtoverlay=googlevoicehat-soundcard" >> "$BOOT_CONFIG"
+    echo "I2S microphone overlay added (reboot required)"
 else
     echo "I2S overlay already configured"
 fi
@@ -90,16 +103,16 @@ fi
 # Add user to i2c and audio groups
 echo ""
 echo "Step 5: Adding user to required groups..."
-USER_NAME=$(logname || echo "pi")
-usermod -a -G i2c,audio,gpio "$USER_NAME"
-echo "User $USER_NAME added to i2c, audio, and gpio groups"
+USER_NAME="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
+usermod -a -G i2c,audio,gpio,spi,netdev "$USER_NAME"
+echo "User $USER_NAME added to i2c, audio, gpio, spi and netdev groups"
 
 # Create virtual environment
 echo ""
 echo "Step 6: Creating Python virtual environment..."
 cd "$INSTALL_DIR"
 if [ ! -d "venv" ]; then
-    python3 -m venv venv
+    sudo -u "$USER_NAME" python3 -m venv venv
     echo "Virtual environment created"
 else
     echo "Virtual environment already exists"
@@ -108,13 +121,14 @@ fi
 # Activate venv and install Python packages
 echo ""
 echo "Step 7: Installing Python packages..."
-source venv/bin/activate
+# Install as the service user so the venv isn't owned by root
+PIP=(sudo -u "$USER_NAME" "$INSTALL_DIR/venv/bin/pip")   # array: the path may contain spaces
 
 # Upgrade pip
-pip install --upgrade pip setuptools wheel
+"${PIP[@]}" install --upgrade pip setuptools wheel
 
 # Install dependencies
-pip install \
+"${PIP[@]}" install \
     numpy \
     ai-edge-litert \
     sounddevice \
@@ -128,9 +142,33 @@ pip install \
     Adafruit-Blinka \
     spidev \
     RPi.GPIO \
-    Pillow
+    Pillow \
+    textual
 
 echo "Python packages installed"
+
+# Terminal control panel: `batmon` command, opened automatically on SSH login
+echo ""
+echo "Step 7b: Installing the batmon control panel..."
+cat > /usr/local/bin/batmon << EOF
+#!/bin/sh
+exec "$INSTALL_DIR/venv/bin/python" "$INSTALL_DIR/batmon.py" "\$@"
+EOF
+chmod +x /usr/local/bin/batmon
+USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+if [ -n "$USER_HOME" ] && ! grep -q ">>> bat-monitor" "$USER_HOME/.bashrc" 2>/dev/null; then
+    cat >> "$USER_HOME/.bashrc" << 'EOF'
+
+# >>> bat-monitor: open the control panel when you SSH in (q = back to the shell) >>>
+# Turn off with: batmon --autostart off
+if [ -n "$SSH_TTY" ] && [ -z "$TMUX" ] && [ -z "$BATMON_NO_AUTOSTART" ]    && [ ! -e "$HOME/.batmon-no-autostart" ] && command -v batmon >/dev/null 2>&1; then
+    BATMON_NO_AUTOSTART=1 batmon
+fi
+# <<< bat-monitor <<<
+EOF
+    chown "$USER_NAME": "$USER_HOME/.bashrc"
+fi
+echo "batmon installed (opens automatically on SSH login)"
 
 # Create systemd service
 echo ""
@@ -145,9 +183,11 @@ Type=simple
 User=$USER_NAME
 WorkingDirectory=$INSTALL_DIR
 Environment="PATH=$INSTALL_DIR/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/main.py
+ExecStart="$INSTALL_DIR/venv/bin/python3" "$INSTALL_DIR/main.py"
 Restart=on-failure
 RestartSec=10
+# Time to finish tonight's report email when stopped
+TimeoutStopSec=120
 StandardOutput=journal
 StandardError=journal
 
@@ -330,11 +370,12 @@ echo "1. Reboot the Raspberry Pi to enable I2C, SPI, and I2S:"
 echo "   sudo reboot"
 echo ""
 echo "2. After reboot, test hardware:"
-echo "   cd $INSTALL_DIR"
+echo "   cd \"$INSTALL_DIR\""
 echo "   source venv/bin/activate"
 echo "   python test_hardware.py"
 echo ""
-echo "3. Configure email settings in config.json"
+echo "3. Control panel: SSH in and it opens automatically, or type: batmon"
+echo "   (q quits to the normal shell; turn auto-open off with: batmon --autostart off)"
 echo ""
 echo "4. Test the TFT display interface:"
 echo "   python ui_controller.py"

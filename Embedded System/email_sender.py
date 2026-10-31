@@ -59,21 +59,38 @@ class EmailSender:
         Args:
             config: Email configuration dict with smtp_host, smtp_port, sender_email, etc.
         """
+        self.update_config(config)
+        logger.info(f"Email sender initialized: {len(self.recipients)} recipient(s)")
+
+    def update_config(self, config: Dict):
+        """Apply new email settings (called when settings are edited at runtime)."""
         self.config = config
         self.smtp_host = config.get('smtp_host', 'smtp.gmail.com')
-        self.smtp_port = config.get('smtp_port', 587)
+        self.smtp_port = int(config.get('smtp_port', 587))
         self.sender_email = config.get('sender_email', '')
         self.sender_password = config.get('sender_password', '')
         self.recipients = config.get('recipients', [])
-        
+
         # Ensure recipients is a list
         if isinstance(self.recipients, str):
             self.recipients = [r.strip() for r in self.recipients.split(',') if r.strip()]
-        
-        self.trendline_slope = config.get('trendline_slope', TRENDLINE_SLOPE)
-        self.trendline_intercept = config.get('trendline_intercept', TRENDLINE_INTERCEPT)
-        
-        logger.info(f"Email sender initialized: {len(self.recipients)} recipient(s)")
+
+        self.trendline_slope = float(config.get('trendline_slope', TRENDLINE_SLOPE))
+        self.trendline_intercept = float(config.get('trendline_intercept', TRENDLINE_INTERCEPT))
+
+    def _connect(self, timeout: float = 30) -> smtplib.SMTP:
+        """Open an authenticated SMTP connection (SSL on port 465, STARTTLS otherwise)."""
+        if not self.sender_email or not self.sender_password:
+            raise ValueError("Sender email or password not configured")
+        if self.smtp_port == 465:
+            server: smtplib.SMTP = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=timeout)
+        else:
+            server = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=timeout)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+        server.login(self.sender_email, self.sender_password)
+        return server
     
     def send_activity_report(self, recording_date: str, activity_tracker,
                            graph_paths: Optional[List[str]] = None,
@@ -320,18 +337,21 @@ class EmailSender:
             html_lines.append("</body></html>")
             html_body = "\n".join(html_lines)
             
-            # Create message
-            msg = MIMEMultipart('related')
+            # Create message: mixed( related( alternative(text, html), inline images ), attachments )
+            msg = MIMEMultipart('mixed')
             msg['From'] = self.sender_email
             msg['To'] = ', '.join(self.recipients)
             msg['Subject'] = subject
-            
+
+            msg_related = MIMEMultipart('related')
+            msg.attach(msg_related)
+
             # Alternative part for plain text and HTML
             msg_alternative = MIMEMultipart('alternative')
-            msg.attach(msg_alternative)
-            
-            msg_alternative.attach(MIMEText(body, 'plain'))
-            msg_alternative.attach(MIMEText(html_body, 'html'))
+            msg_related.attach(msg_alternative)
+
+            msg_alternative.attach(MIMEText(body, 'plain', 'utf-8'))
+            msg_alternative.attach(MIMEText(html_body, 'html', 'utf-8'))
             
             # Attach graph images (both as embedded and attachments)
             if graph_paths:
@@ -344,7 +364,7 @@ class EmailSender:
                             img.add_header('Content-ID', f'<graph{idx}>')
                             img.add_header('Content-Disposition', 'inline',
                                          filename=os.path.basename(graph_path))
-                            msg.attach(img)
+                            msg_related.attach(img)
                             
                             # Also attach as regular attachment
                             with open(graph_path, 'rb') as f:
@@ -357,10 +377,7 @@ class EmailSender:
                             logger.warning(f"Could not attach graph {graph_path}: {e}")
             
             # Send email
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                server.ehlo()
-                server.starttls()
-                server.login(self.sender_email, self.sender_password)
+            with self._connect() as server:
                 server.sendmail(self.sender_email, self.recipients, msg.as_string())
             
             logger.info(f"Activity report sent to {len(self.recipients)} recipient(s)")
@@ -390,16 +407,41 @@ class EmailSender:
             Empty string on success, error message on failure
         """
         try:
-            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
-                server.ehlo()
-                server.starttls()
-                server.login(self.sender_email, self.sender_password)
-            
+            with self._connect(timeout=15):
+                pass
+
             logger.info("Email connection test successful")
             return ""
-        
+
         except Exception as e:
             error_msg = f"Email connection failed: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    def send_test_email(self) -> str:
+        """
+        Send a short test email to all recipients.
+
+        Returns:
+            Empty string on success, error message on failure
+        """
+        if not self.recipients:
+            return "No recipient email addresses configured."
+        try:
+            msg = MIMEText(
+                "This is a test email from the Bat Activity Monitoring System.\n\n"
+                "If you received it, nightly reports will be delivered to this address.\n\n"
+                f"Sent: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                'plain', 'utf-8')
+            msg['From'] = self.sender_email
+            msg['To'] = ', '.join(self.recipients)
+            msg['Subject'] = "Bat Monitor — test email"
+            with self._connect(timeout=15) as server:
+                server.sendmail(self.sender_email, self.recipients, msg.as_string())
+            logger.info(f"Test email sent to {len(self.recipients)} recipient(s)")
+            return ""
+        except Exception as e:
+            error_msg = f"Test email failed: {str(e)}"
             logger.error(error_msg)
             return error_msg
 
@@ -427,6 +469,7 @@ class EmailQueue:
         self.queue = queue.Queue()
         self.worker_thread = None
         self.running = False
+        self._stop_event = threading.Event()
         
         logger.info(f"Email queue initialized (max_retries={max_retries})")
     
@@ -471,7 +514,10 @@ class EmailQueue:
                     if email_data['attempts'] < self.max_retries:
                         logger.warning(f"Email send failed (attempt {email_data['attempts']}): {error}")
                         logger.info(f"Retrying in {self.retry_delay} seconds...")
-                        time.sleep(self.retry_delay)
+                        # Wait, but wake up early if the queue is being stopped
+                        if self._stop_event.wait(self.retry_delay):
+                            # Shutting down: one last try now instead of losing the report
+                            email_data['attempts'] = self.max_retries - 1
                         # Re-queue
                         self.queue.put(email_data)
                     else:
@@ -504,12 +550,27 @@ class EmailQueue:
         """Start queue worker."""
         if not self.running:
             self.running = True
+            self._stop_event.clear()
             self.worker_thread = threading.Thread(target=self._worker, daemon=True)
             self.worker_thread.start()
             logger.info("Email queue started")
-    
-    def stop(self, wait: bool = True):
-        """Stop queue worker."""
+
+    def stop(self, wait: bool = True, drain_timeout: float = 60.0):
+        """
+        Stop queue worker.
+
+        Args:
+            wait: Wait for the worker thread to finish
+            drain_timeout: Seconds to keep trying to deliver queued reports first
+        """
+        self._stop_event.set()
+        if wait and self.running and self.queue.unfinished_tasks:
+            logger.info(f"Delivering {self.queue.unfinished_tasks} queued email(s) before stopping...")
+            deadline = time.time() + drain_timeout
+            while self.queue.unfinished_tasks and time.time() < deadline:
+                time.sleep(0.2)
+            if self.queue.unfinished_tasks:
+                logger.warning("Stopped with undelivered email(s) still queued")
         self.running = False
         if wait and self.worker_thread:
             self.worker_thread.join(timeout=5.0)

@@ -4,7 +4,7 @@ Provides streaming audio interface for real-time bat vocalization capture.
 """
 
 import numpy as np
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional, Tuple
 import queue
 import threading
 import time
@@ -103,11 +103,8 @@ class I2SAudioCapture:
         if status:
             logger.warning(f"Audio callback status: {status}")
         
-        # Copy audio data and convert int32 to float32
-        audio_chunk = indata.copy().astype(np.float32)
-        
-        # Normalize int32 to float32 range [-1, 1]
-        audio_chunk = audio_chunk / 2147483648.0
+        # Convert int32 to float32 in range [-1, 1] (astype copies the buffer)
+        audio_chunk = indata.astype(np.float32) / 2147483648.0
         
         try:
             # Non-blocking put
@@ -122,10 +119,11 @@ class I2SAudioCapture:
         """Process audio chunks from queue."""
         logger.info("Audio processing loop started")
         
-        while self.is_capturing:
+        # Keep going after stop() until already-captured audio has been handled
+        while self.is_capturing or not self.audio_queue.empty():
             try:
                 # Get chunk with timeout
-                audio_chunk, timestamp = self.audio_queue.get(timeout=1.0)
+                audio_chunk, timestamp = self.audio_queue.get(timeout=0.5)
                 
                 # Convert stereo to mono by taking left channel only
                 if audio_chunk.ndim > 1:
@@ -214,8 +212,11 @@ class I2SAudioCapture:
         
         # Stop stream
         if self.stream:
-            self.stream.stop()
-            self.stream.close()
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception as e:
+                logger.warning(f"Error closing audio stream: {e}")
             self.stream = None
         
         # Wait for processing thread
@@ -276,6 +277,9 @@ class VocalizationDetector:
     """
     Detects bat vocalizations from audio stream using energy-based detection.
     Extracts individual vocalization segments from continuous audio.
+
+    Segments may span chunk boundaries; audio is kept only as long as needed
+    (the open segment plus a little pre-roll padding).
     """
     
     def __init__(self, sample_rate: int = 44100, min_duration: float = 0.5,
@@ -293,118 +297,132 @@ class VocalizationDetector:
             padding: Padding to add before/after vocalization (seconds)
         """
         self.sample_rate = sample_rate
-        self.min_duration = min_duration
-        self.max_duration = max_duration
-        self.silence_duration = silence_duration
-        self.energy_threshold = energy_threshold
-        self.padding = padding
-        
-        # Detection parameters
         self.window_size = int(0.02 * sample_rate)  # 20ms windows
         self.hop_size = self.window_size // 2
-        self.silence_frames_needed = int(silence_duration / (self.hop_size / sample_rate))
-        self.max_frames = int(max_duration / (self.hop_size / sample_rate))
-        self.padding_samples = int(padding * sample_rate)
+        self.configure(min_duration, max_duration, silence_duration, energy_threshold, padding)
         
-        # State
-        self.audio_buffer = np.array([], dtype=np.float32)
-        self.current_start_sample = None
-        self.consecutive_silence = 0
-        self.current_duration_frames = 0
-        self.total_samples_processed = 0
-        
-        # Callback for detected vocalizations
-        self.on_vocalization: Optional[Callable[[Optional[np.ndarray], float, float], None]] = None
+        # Callback for detected vocalizations: (audio, start_timestamp, end_timestamp)
+        self.on_vocalization: Optional[Callable[[np.ndarray, float, float], None]] = None
         
         # Statistics
         self.vocalizations_detected = 0
         
+        self.reset()
         logger.info(f"Vocalization detector initialized: {min_duration}-{max_duration}s, threshold={energy_threshold}")
+
+    def configure(self, min_duration: float, max_duration: float, silence_duration: float,
+                  energy_threshold: float, padding: float = 0.1):
+        """Update detection parameters (safe to call between chunks)."""
+        self.min_duration = float(min_duration)
+        self.max_duration = float(max_duration)
+        self.silence_duration = float(silence_duration)
+        self.energy_threshold = float(energy_threshold)
+        self.padding = float(padding)
+
+        self.min_samples = int(self.min_duration * self.sample_rate)
+        self.max_samples = max(self.window_size, int(self.max_duration * self.sample_rate))
+        self.silence_samples = int(self.silence_duration * self.sample_rate)
+        self.padding_samples = int(self.padding * self.sample_rate)
     
-    def process_chunk(self, audio_chunk: np.ndarray, timestamp: float):
+    def process_chunk(self, audio_chunk: np.ndarray, timestamp: float) -> List[Tuple[np.ndarray, float]]:
         """
         Process audio chunk and detect vocalizations.
         
         Args:
-            audio_chunk: Audio data array
-            timestamp: Timestamp of chunk
+            audio_chunk: Audio data array (mono)
+            timestamp: Wall-clock time at the END of the chunk (as given by I2SAudioCapture)
+
+        Returns:
+            List of (segment_audio, segment_start_timestamp) for completed vocalizations
         """
-        # Add to buffer
-        self.audio_buffer = np.concatenate([self.audio_buffer, audio_chunk])
-        
-        # Process in sliding windows
-        while len(self.audio_buffer) >= self.window_size:
-            window = self.audio_buffer[:self.window_size]
-            
-            # Calculate RMS energy
-            rms = np.sqrt(np.mean(window ** 2))
-            
-            if rms > self.energy_threshold:
-                # Sound detected
-                if self.current_start_sample is None:
-                    # Start new vocalization
-                    self.current_start_sample = max(0, self.total_samples_processed - self.padding_samples)
-                    self.current_duration_frames = 0
-                else:
-                    self.current_duration_frames += 1
-                
-                self.consecutive_silence = 0
-                
-                # Check if vocalization is too long
-                if self.current_duration_frames >= self.max_frames:
-                    self._end_vocalization()
-            else:
-                # Silence
-                if self.current_start_sample is not None:
-                    self.consecutive_silence += 1
-                    
-                    # Check if silence is long enough to end vocalization
-                    if self.consecutive_silence >= self.silence_frames_needed:
-                        self._end_vocalization()
-            
-            # Move to next hop
-            self.audio_buffer = self.audio_buffer[self.hop_size:]
-            self.total_samples_processed += self.hop_size
+        audio_chunk = np.asarray(audio_chunk, dtype=np.float32).ravel()
+        if self._time_origin is None:
+            self._time_origin = timestamp - len(audio_chunk) / self.sample_rate
+
+        self._buffer = np.concatenate([self._buffer, audio_chunk])
+        buffer_end = self._buffer_start + len(self._buffer)
+        segments: List[Tuple[np.ndarray, float]] = []
+
+        n_frames = (buffer_end - self._next_frame - self.window_size) // self.hop_size + 1
+        if n_frames > 0:
+            rel = self._next_frame - self._buffer_start
+            span = self._buffer[rel:rel + (n_frames - 1) * self.hop_size + self.window_size]
+            frames = np.lib.stride_tricks.sliding_window_view(span, self.window_size)[::self.hop_size]
+            rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
+            self.last_rms = float(rms.max())
+            self.noise_floor = float(np.percentile(rms, 20))
+
+            for i, loud in enumerate(rms > self.energy_threshold):
+                frame_start = self._next_frame + i * self.hop_size
+                frame_end = frame_start + self.window_size
+                if loud:
+                    if self._seg_start is None:
+                        self._seg_start = max(self._buffer_start, frame_start - self.padding_samples)
+                    self._last_active = frame_end
+                    if frame_end - self._seg_start >= self.max_samples:
+                        self._emit(frame_end, segments)
+                elif self._seg_start is not None and frame_start - self._last_active >= self.silence_samples:
+                    self._emit(min(self._last_active + self.padding_samples, frame_end), segments)
+
+            self._next_frame += n_frames * self.hop_size
+
+        # Drop audio that can no longer be part of a segment
+        keep_from = self._seg_start if self._seg_start is not None else self._next_frame - self.padding_samples
+        keep_from = max(self._buffer_start, min(keep_from, self._next_frame))
+        self._buffer = self._buffer[keep_from - self._buffer_start:]
+        self._buffer_start = keep_from
+
+        if self.on_vocalization:
+            for seg, start_ts in segments:
+                self.on_vocalization(seg, start_ts, start_ts + len(seg) / self.sample_rate)
+        return segments
+
+    def flush(self) -> List[Tuple[np.ndarray, float]]:
+        """End any open vocalization (e.g. when monitoring stops) and return it."""
+        segments: List[Tuple[np.ndarray, float]] = []
+        if self._seg_start is not None:
+            buffer_end = self._buffer_start + len(self._buffer)
+            self._emit(min(self._last_active + self.padding_samples, buffer_end), segments)
+        return segments
     
-    def _end_vocalization(self):
+    def _emit(self, end_sample: int, segments: List[Tuple[np.ndarray, float]]):
         """End current vocalization and extract segment."""
-        if self.current_start_sample is None:
+        if self._seg_start is None:
             return
         
-        end_sample = self.total_samples_processed + self.padding_samples
-        duration = (end_sample - self.current_start_sample) / self.sample_rate
-        
-        # Check if duration is valid
-        if duration >= self.min_duration:
-            start_time = self.current_start_sample / self.sample_rate
-            end_time = end_sample / self.sample_rate
-            
+        if end_sample - self._seg_start >= self.min_samples:
+            seg = self._buffer[self._seg_start - self._buffer_start:end_sample - self._buffer_start].copy()
+            start_ts = (self._time_origin or 0.0) + self._seg_start / self.sample_rate
+            segments.append((seg, start_ts))
             self.vocalizations_detected += 1
-            
-            if self.on_vocalization:
-                self.on_vocalization(None, start_time, end_time)
         
         # Reset state
-        self.current_start_sample = None
-        self.current_duration_frames = 0
-        self.consecutive_silence = 0
+        self._seg_start = None
+        self._last_active = 0
     
-    def set_callback(self, callback: Callable[[Optional[np.ndarray], float, float], None]):
+    def set_callback(self, callback: Callable[[np.ndarray, float, float], None]):
         """Set callback for detected vocalizations."""
         self.on_vocalization = callback
     
     def reset(self):
         """Reset detector state."""
-        self.audio_buffer = np.array([], dtype=np.float32)
-        self.current_start_sample = None
-        self.consecutive_silence = 0
-        self.current_duration_frames = 0
+        self._buffer = np.array([], dtype=np.float32)
+        self._buffer_start = 0       # absolute sample index of _buffer[0]
+        self._next_frame = 0         # absolute sample index of next analysis frame
+        self._seg_start: Optional[int] = None
+        self._last_active = 0        # absolute sample index where the last loud frame ended
+        self._time_origin: Optional[float] = None
+        self.last_rms = 0.0          # loudest 20ms frame in the last chunk
+        self.noise_floor = 0.0       # typical quiet-frame level in the last chunk
 
 
 if __name__ == "__main__":
     import sys
     
     print("Testing I2S Audio Capture...")
+    if sd is None:
+        print("✗ sounddevice is not installed")
+        sys.exit(1)
     print("Available audio devices:")
     print(sd.query_devices())
     

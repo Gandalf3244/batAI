@@ -3,9 +3,21 @@ TFLite model inference for real-time bat vocalization classification.
 Loads and runs the converted TFLite model with label decoding.
 """
 
+import hashlib
+import json
 import numpy as np
-from ai_edge_litert.interpreter import Interpreter
 import pickle
+
+# Any of these TFLite runtimes can run the model; use whichever is installed
+try:
+    from ai_edge_litert.interpreter import Interpreter
+except ImportError:
+    try:
+        from tflite_runtime.interpreter import Interpreter  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import tensorflow as _tf  # type: ignore[import-not-found]
+        Interpreter = _tf.lite.Interpreter  # type: ignore[misc]
+
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional
 import logging
@@ -26,6 +38,27 @@ CLASS_LABEL_MAP = {
     "straws_talking": ("Straws", "Talking"),
     "straws_want_food": ("Straws", "Want_Food"),
 }
+
+
+def apply_class_bias(probabilities: np.ndarray, bias: np.ndarray) -> np.ndarray:
+    """Shift class probabilities by per-class log-offsets and renormalise.
+
+    Used to correct a model trained with balanced class weights, which otherwise
+    over-predicts the rare classes in real (mostly Straws-fighting) audio."""
+    logp = np.log(np.clip(probabilities, 1e-9, 1.0)) + bias
+    logp = logp - logp.max(axis=-1, keepdims=True)
+    p = np.exp(logp)
+    return p / p.sum(axis=-1, keepdims=True)
+
+
+def calibration_path(model_path) -> Path:
+    """bat_model.tflite -> bat_model.calibration.json"""
+    model_path = Path(model_path)
+    return model_path.with_name(model_path.stem + ".calibration.json")
+
+
+def file_sha1(path) -> str:
+    return hashlib.sha1(Path(path).read_bytes()).hexdigest()
 
 
 def _normalize_class_name(class_name: str) -> str:
@@ -68,8 +101,11 @@ class BatClassifier:
         
         # Load label encoder
         self.label_encoder = self._load_label_encoder()
-        self.class_names = list(self.label_encoder.classes_)
+        self.class_names = [str(name) for name in self.label_encoder.classes_]
         self.logged_class_names = [name for name in ACTIVE_CLASS_ORDER if name in self.class_names]
+
+        # Optional count correction that belongs to this exact model file
+        self.class_bias = self._load_calibration()
         
         # Log model info
         logger.info(f"Model loaded: {self.model_path}")
@@ -93,6 +129,24 @@ class BatClassifier:
         except Exception as e:
             raise RuntimeError(f"Failed to load model: {e}")
     
+    def _load_calibration(self) -> Optional[np.ndarray]:
+        """Load <model>.calibration.json if present and made for this model file."""
+        path = calibration_path(self.model_path)
+        if not path.exists():
+            return None
+        try:
+            cal = json.loads(path.read_text())
+            if cal.get("model_sha1") and cal["model_sha1"] != file_sha1(self.model_path):
+                logger.warning(f"Ignoring {path.name}: it was made for a different model file")
+                return None
+            bias = np.array([float(cal["class_bias"].get(c, 0.0)) for c in self.class_names], np.float32)
+            logger.info("Count correction loaded: " + ", ".join(
+                f"{c} {b:+.2f}" for c, b in zip(self.class_names, bias)))
+            return bias
+        except Exception as e:
+            logger.warning(f"Ignoring {path.name}: {e}")
+            return None
+
     def _load_label_encoder(self):
         """Load label encoder from pickle file."""
         if not self.label_encoder_path.exists():
@@ -132,6 +186,8 @@ class BatClassifier:
         # Get output
         output = self.interpreter.get_tensor(self.output_details[0]['index'])
         probabilities = output[0]  # Remove batch dimension
+        if self.class_bias is not None:
+            probabilities = apply_class_bias(probabilities, self.class_bias)
         
         # Get predicted class
         predicted_idx = np.argmax(probabilities)

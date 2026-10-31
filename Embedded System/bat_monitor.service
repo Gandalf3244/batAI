@@ -3,6 +3,9 @@ Description=Bat Activity Monitoring System
 Documentation=https://github.com/yourusername/bat-monitor
 After=network.target network-online.target
 Wants=network-online.target
+# Give up after 5 crashes in 200s
+StartLimitIntervalSec=200
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -14,9 +17,9 @@ ExecStart=/home/pi/bat-monitor/venv/bin/python3 /home/pi/bat-monitor/main.py
 
 # Restart policy
 Restart=on-failure
+# Time to finish tonight's report email when stopped
+TimeoutStopSec=120
 RestartSec=10
-StartLimitInterval=200
-StartLimitBurst=5
 
 # Logging
 StandardOutput=journal
@@ -24,11 +27,11 @@ StandardError=journal
 SyslogIdentifier=bat-monitor
 
 # Security
-NoNewPrivileges=true
+# (NoNewPrivileges is not set: setting the clock and WiFi from the UI uses sudo)
 PrivateTmp=true
 
 # Resource limits
-MemoryLimit=400M
+MemoryMax=400M
 CPUQuota=80%
 
 [Install]

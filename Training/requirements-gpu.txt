@@ -1,0 +1,4 @@
+# Ubuntu + NVIDIA GPU: TensorFlow with its CUDA/cuDNN libraries bundled.
+# Only the NVIDIA driver needs to be installed system-wide (check: nvidia-smi).
+-r requirements.txt
+tensorflow[and-cuda]>=2.16

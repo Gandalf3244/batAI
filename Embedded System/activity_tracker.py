@@ -53,6 +53,7 @@ class ActivityTracker:
             start_time: Recording start time (default: now)
         """
         self.start_time = start_time or datetime.now()
+        self.end_time: Optional[datetime] = None  # set by finish() when recording stops
         
         # Activity data: {hour: {class_name: count}}
         self.hourly_activity: Dict[int, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -144,21 +145,26 @@ class ActivityTracker:
         # Get total Want_Food calls for this species
         want_food_count = self.species_behavior_counts.get(species, {}).get("Want_Food", 0)
         
-        # Calculate recording duration in hours
-        if self.classifications:
-            last_time = self.classifications[-1][0]
-            duration_hours = (last_time - self.start_time).total_seconds() / 3600
-            duration_hours = max(duration_hours, 0.01)  # Avoid division by zero
-        else:
-            duration_hours = 1.0
+        # Rate over the whole recording, not just up to the last call
+        duration_hours = self.get_recording_duration().total_seconds() / 3600
+        duration_hours = max(duration_hours, 0.01)  # Avoid division by zero
         
         return want_food_count / duration_hours
+
+    def finish(self, end_time: Optional[datetime] = None):
+        """Mark the recording as finished."""
+        self.end_time = end_time or datetime.now()
     
     def get_recording_duration(self) -> timedelta:
-        """Get total recording duration."""
+        """Get total recording duration (start to stop, or to now while still recording)."""
+        end = self.end_time or datetime.now()
         if self.classifications:
-            return self.classifications[-1][0] - self.start_time
-        return timedelta(0)
+            end = max(end, self.classifications[-1][0])
+        return max(end - self.start_time, timedelta(0))
+
+    def get_recent_classifications(self, limit: int = 20) -> List[Tuple[datetime, str, float]]:
+        """Most recent classifications, newest first."""
+        return list(reversed(self.classifications[-limit:]))
     
     def generate_timeline_graph(self, output_path: Optional[str] = None,
                                figsize: Tuple[int, int] = (12, 6),
@@ -204,7 +210,7 @@ class ActivityTracker:
             
             # Plot stacked bars
             bottom = np.zeros(len(hours))
-            colormap = plt.cm.get_cmap('Set3')
+            colormap = matplotlib.colormaps['Set3']  # plt.cm.get_cmap was removed in matplotlib 3.9
             colors = colormap(np.linspace(0, 1, len(species_list)))
             
             for idx, species in enumerate(species_list):
@@ -256,6 +262,8 @@ class ActivityTracker:
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 1)
             plt.tight_layout()
+            if output_path:
+                fig.savefig(output_path, dpi=dpi, bbox_inches='tight')
             return fig
         
         # Create subplots for each species
@@ -274,7 +282,7 @@ class ActivityTracker:
                 counts = list(behaviors.values())
                 
                 # Create pie chart
-                colormap = plt.cm.get_cmap('Pastel1')
+                colormap = matplotlib.colormaps['Pastel1']  # plt.cm.get_cmap was removed in matplotlib 3.9
                 colors = colormap(np.linspace(0, 1, len(behavior_names)))
                 wedges, texts, autotexts = ax.pie(
                     counts,

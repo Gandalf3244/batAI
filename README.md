@@ -26,9 +26,18 @@ The system found a moderate positive correlation (**r = 0.5**) between straw bat
 
 ## Model
 
-A hybrid CNN-LSTM architecture built with Keras/TensorFlow. Audio is converted to mel-spectrograms (79 × 120), passed through two convolutional blocks (64 and 128 filters), an LSTM layer for temporal modeling, and dense layers for behavior classification.
+**Deployed model** (`Embedded System/bat_model.tflite`, retrained October 2026): an
+average of five small 1D CNNs over mel-spectrogram features (16 kHz audio, 451 frames ×
+120 mel bands plus their deltas). It is trained with balanced class weights so the
+rare calls are learned, and it ignores overall loudness (recording level/distance). A small
+per-class count correction (`bat_model.calibration.json`) keeps nightly call counts in line
+with reality. Its honest results — tested on recording nights it never trained on — are in
+`AI Model/bat_model_report.md` and `AI Model/bat_model_calibration_report.md`.
 
-**Behavior classes** include vocalizations such as rod fighting, straw fighting, straw talking, and "want food" calls, labeled from overnight recordings.
+The original CNN-LSTM (`AI Model/12_29_both_species.keras`) is kept for reference.
+
+**Behavior classes:** Rods fighting, Straws fighting, Straws talking, and Straws "want food",
+labeled from overnight recordings.
 
 ---
 
@@ -36,11 +45,11 @@ A hybrid CNN-LSTM architecture built with Keras/TensorFlow. Audio is converted t
 
 ```
 batAI/
-├── AI Model/            # Trained model files and inference code
-├── Embedded System/      # Raspberry Pi firmware / deployment scripts
-├── Preprocessing/        # Audio segmentation, labeling, spectrogram generation
+├── AI Model/            # Trained models (.keras) and their evaluation reports
+├── Embedded System/     # Everything the Raspberry Pi needs (code, model, installer, README)
+├── Preprocessing/       # Audio segmentation, labeling, spectrogram generation
 ├── Results/             # Spreadsheet with data and AppsScript for data processing
-├── Training/              # Model training scripts and experiments
+├── Training/            # Labeled clips, labels, and the training scripts
 ├── behavior_timeline_gui.py   # Tkinter GUI for reviewing/classifying recordings
 └── README.md
 ```
@@ -51,7 +60,7 @@ batAI/
 
 **GUI** (`behavior_timeline_gui.py`) — A Tkinter app that loads an overnight recording, segments and classifies vocalizations (confidence threshold: 0.7), plots call frequency over time, and exports data to Google Sheets. A companion email script sends a daily prediction report.
 
-**Embedded System** — A self-contained Raspberry Pi Zero 2W unit installed in the bat exhibit. Records at scheduled times, runs inference locally, and emails a full overnight report to zookeepers.
+**Embedded System** — A self-contained Raspberry Pi Zero 2W unit installed in the bat exhibit. Records at scheduled times, runs inference locally, and emails a full overnight report to zookeepers. Only sounds louder than an adjustable threshold are classified. Settings can be changed on the device's screen and knob, or in a terminal control panel (`batmon`) that opens when you SSH in.
 
 Hardware: INMP441 microphone, DS3231 real-time clock, TFT LCD + EC11 rotary encoder, 3D-printed case (Onshape / Prusa MK4S).
 
@@ -61,10 +70,9 @@ Hardware: INMP441 microphone, DS3231 real-time clock, TFT LCD + EC11 rotary enco
 
 ### Requirements
 
-```bash
-pip install tensorflow keras numpy librosa
-pip install tflite-runtime  # for Raspberry Pi deployment
-```
+- **Raspberry Pi:** `Embedded System/install.sh` installs everything (see below).
+- **Training (desktop, NVIDIA GPU recommended):** `pip install -r Training/requirements-gpu.txt`
+  (or `Training/requirements.txt` without a GPU).
 
 ### Usage
 
@@ -74,39 +82,44 @@ There are three main ways to use this repo, depending on what you're trying to d
 
 Use this if you want to reproduce training, fine-tune on new data, or retrain from scratch.
 
-1. Go to the **`Training/`** folder — it contains the labeled audio clips used for training, along with the training script(s).
-2. Confirm the clips are organized by behavior class (folder structure or filename prefix, matching the labels used during training).
-3. Run the training script from inside `Training/`:
+1. The labeled clips are in `Training/Audio files/`, and the labels in `Training/Labels`.
+2. Train (on a desktop; about 1–3 hours with an NVIDIA GPU):
    ```bash
    cd Training
-   python train.py
+   python train_bat_model.py --data .
    ```
-4. The script will preprocess the clips into mel-spectrograms, train the CNN-LSTM model, and output:
-   - A trained model file (e.g. `model.h5` / `model.keras`)
-   - A label encoder file (e.g. `label_encoder.pkl`) mapping class indices to behavior names
-5. Check the specific script (`train.py` or equivalent) inside `Training/` for exact hyperparameters, file paths, and output locations — these are documented in-line in that folder.
+3. Every candidate model is tested on recording nights it never trained on. The best one is
+   exported for the Pi with its count correction. Outputs in `Training/output/`:
+   - `bat_model.tflite`, `bat_model.calibration.json`, `label_encoder.pkl` — copy to the Pi
+   - `report.md` — per-call-type results compared with the current model
+4. Full guide, options and tips: [`Training/README.md`](Training/README.md).
+   The original training script (`Training/train_audio_model.py`) is kept for reference.
 
 #### 2. Deploy straight to the embedded system
 
-Use this if you just want to run the existing trained model on hardware, without retraining.
+Use this if you just want to run the trained model on hardware. `Embedded System/` already
+contains the trained model, so there is nothing to copy in.
 
-1. Go to the **`AI Model/`** folder and copy out:
-   - The trained model file (`.h5` / `.keras` / `.tflite`)
-   - The label encoder file
-2. Go to the **`Embedded System/`** folder, which contains the Raspberry Pi deployment code.
-3. Place the model and label encoder files into the location expected by the embedded script (check the paths referenced at the top of the main script in `Embedded System/`).
-4. Set up the hardware:
+1. Set up the hardware:
    - Raspberry Pi Zero 2W
    - INMP441 I2S microphone
    - DS3231 real-time clock module
    - TFT LCD + EC11 rotary encoder for on-device controls
-   - 3D-printed enclosure
-5. Install dependencies on the Pi:
+   - 3D-printed enclosure (`Embedded System/Part Studio 1 - Box.3mf`)
+2. On the Pi, get the code and run the installer (it installs the dependencies, enables I2C/SPI/I2S, and sets up the service), then reboot:
    ```bash
-   pip install tflite-runtime numpy librosa
+   git clone https://github.com/Gandalf3244/batAI.git
+   cd "batAI/Embedded System"
+   sudo bash install.sh
+   sudo reboot
    ```
-6. Configure recording schedule, email credentials, and any exhibit-specific settings in the config section of the main script in `Embedded System/`.
-7. Run the main script (check the folder for the exact entry-point filename, e.g. `main.py`) — it will record on schedule, classify overnight, and email zookeepers a report each morning.
+3. Set the schedule, email account and recipients either on the device (turn = move, click = select, hold = back) or over SSH — the `batmon` control panel opens automatically when you log in.
+4. Start the service (it records on schedule, classifies overnight, and emails zookeepers a report each morning):
+   ```bash
+   sudo systemctl enable --now bat-monitor
+   ```
+
+Details, wiring and troubleshooting: [`Embedded System/README.md`](Embedded%20System/README.md).
 
 #### 3. GUI, preprocessing
 
