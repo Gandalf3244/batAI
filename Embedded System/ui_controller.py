@@ -928,7 +928,8 @@ class UIController:
                 return self.rtc.get_datetime()
             except Exception:
                 pass
-        return datetime.now()
+        from rtc_scheduler import local_now
+        return local_now()
 
     def _monitoring(self) -> bool:
         try:
@@ -1007,7 +1008,7 @@ class UIController:
             slope = float(self.config.get("email.trendline_slope", 6.4899))
             icpt = float(self.config.get("email.trendline_intercept", 40.2899))
             return [
-                (now.strftime("%a %d %b %Y  %H:%M:%S"), self.COLOR_WHITE),
+                (now.strftime("%a %d %b %Y  %H:%M:%S ") + self._tz_abbr(), self.COLOR_WHITE),
                 ("Monitoring: ACTIVE" if self._monitoring() else "Monitoring: idle",
                  self.COLOR_GREEN if self._monitoring() else self.COLOR_GRAY),
                 ("", None),
@@ -1019,6 +1020,11 @@ class UIController:
                  self.COLOR_CYAN),
             ] + self._network_rows()
         self.push(InfoScreen("Status", rows))
+
+    @staticmethod
+    def _tz_abbr() -> str:
+        from rtc_scheduler import timezone_abbr
+        return timezone_abbr()
 
     def _network_rows(self) -> List[Tuple[str, tuple]]:
         import wifi_manager
@@ -1061,6 +1067,32 @@ class UIController:
     # clock --------------------------------------------------------------------
 
     def _open_clock(self):
+        def items():
+            from rtc_scheduler import timezone_label
+            return [(f"Date & time   {self._now():%d %b %H:%M}", self._edit_clock),
+                    (f"Time zone   {timezone_label()}"[:34], self._pick_timezone)]
+        menu = MenuScreen("Clock", items, color=(15, 50, 110))
+        menu.live = True
+        self.push(menu)
+
+    def _pick_timezone(self):
+        from rtc_scheduler import COMMON_TIMEZONES, timezone_label
+        current = self.config.get("system.timezone")
+
+        def choose(zone):
+            self.config.set("system.timezone", zone)
+            self._settings_changed()              # the monitor applies it right away
+            self.pop()
+            self.toast(f"Time zone: {timezone_label(zone)}")
+
+        def items():
+            return [(("✓ " if zone == current else "   ") + timezone_label(zone), lambda z=zone: choose(z))
+                    for _label, zone in COMMON_TIMEZONES]
+        menu = MenuScreen("Time zone", items, color=(15, 50, 110))
+        menu.index = next((i for i, (_l, z) in enumerate(COMMON_TIMEZONES) if z == current), 0)
+        self.push(menu)
+
+    def _edit_clock(self):
         now = self._now()
 
         def save(v):

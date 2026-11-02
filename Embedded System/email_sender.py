@@ -21,6 +21,8 @@ import queue
 import threading
 import time
 
+from rtc_scheduler import local_now, timezone_abbr  # times in the configured time zone
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -291,7 +293,7 @@ class EmailSender:
         body_lines.extend([
             "─" * 58,
             "Generated automatically by Bat Activity Monitoring System",
-            f"Report generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Report generated: {local_now():%Y-%m-%d %H:%M:%S} {timezone_abbr()}",
         ])
         
         body = "\n".join(body_lines)
@@ -462,7 +464,7 @@ class EmailSender:
             msg = MIMEText(
                 "This is a test email from the Bat Activity Monitoring System.\n\n"
                 "If you received it, nightly reports will be delivered to this address.\n\n"
-                f"Sent: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Sent: {local_now():%Y-%m-%d %H:%M:%S} {timezone_abbr()}",
                 'plain', 'utf-8')
             msg['From'] = self.sender_email
             msg['To'] = ', '.join(self.recipients)
@@ -552,7 +554,7 @@ class EmailQueue:
             logger.error("Report could not be sent and no outbox is configured - it is lost")
             return
         os.makedirs(self.outbox_dir, exist_ok=True)
-        path = os.path.join(self.outbox_dir, f"report_{datetime.now():%Y%m%d_%H%M%S_%f}.eml")
+        path = os.path.join(self.outbox_dir, f"report_{local_now():%Y%m%d_%H%M%S_%f}.eml")
         with open(path, "w", encoding="utf-8") as f:
             f.write(raw)
         logger.warning(f"Report saved to the outbox, will keep retrying: {path}")

@@ -236,6 +236,12 @@ Edit `config.json`:
 2. Generate App Password: https://myaccount.google.com/apppasswords
 3. Use the app password (not your regular password)
 
+### Time and time zone
+
+Every time the monitor shows or uses is in one time zone: the recording schedule, the device screen, the control panel, logs and reports. The default is Pacific (the Oregon Zoo). Change it on the device under **Set clock → Time zone**, or in the control panel under **Clock** (key `6`). It applies immediately.
+
+The DS3231 clock chip keeps UTC, so daylight-saving changes never put it out. With internet, the chip is kept on internet time (checked hourly). Without internet, the Pi sets its own clock from the chip at startup. If the time is wrong, use **Set clock → Date & time** on the device, or **Clock** in the control panel.
+
 ### WiFi (and getting back in if it's wrong)
 
 **Joining a network:** on the device, open **WiFi → Choose network…**, pick yours from the list and type only the password. The top of the WiFi menu (and **Status**) shows which network the Pi is on and its IP address, which is the address to SSH to.

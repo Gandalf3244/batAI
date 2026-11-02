@@ -32,6 +32,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 AUTOSTART_OFF = Path.home() / ".batmon-no-autostart"
 
+from rtc_scheduler import local_now  # noqa: E402  (the configured time zone)
+
 from rich.text import Text  # noqa: E402  (installed with textual)
 from textual import on, work  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
@@ -83,8 +85,11 @@ class Backend:
 
     def __init__(self, config_path: Optional[str] = None):
         from config_manager import ConfigManager
+        from rtc_scheduler import apply_timezone
         self.config_path = config_path
-        self.port = int(ConfigManager(config_path).get("web.port", 8080))
+        cfg = ConfigManager(config_path)
+        self.port = int(cfg.get("web.port", 8080))
+        apply_timezone(str(cfg.get("system.timezone") or "America/Los_Angeles"))   # header clock etc.
         self.base = f"http://127.0.0.1:{self.port}"
         self.live = False
 
@@ -287,7 +292,7 @@ class Timeline(Widget):
             a, b = mins(self.start), mins(self.stop)
         except ValueError:
             return Text("\nEnter valid times as HH:MM (00:00 to 23:59)", style="red")
-        now = datetime.now()
+        now = local_now()
         now_col = int((now.hour * 60 + now.minute) / 1440 * w)
         t = Text()
         ticks = [" "] * w
@@ -412,7 +417,7 @@ class BatMon(App):
     # -- layout -------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True, icon="🦇")
+        yield Header(icon="🦇")          # the clock is in the subtitle, in the configured zone
         with Horizontal(id="statusbar"):
             yield Static("Connecting…", id="status")
             yield Button("…", id="monitor-btn", disabled=True)
@@ -527,6 +532,12 @@ class BatMon(App):
                                 "be copied to the DS3231.", classes="dim")
                     with Horizontal(classes="actions"):
                         yield Button("Copy Pi system time → RTC", id="clock-sync", variant="primary")
+                    yield Label("\nTime zone (used for the schedule and every time shown)", classes="flabel")
+                    with Horizontal(classes="actions"):
+                        from rtc_scheduler import COMMON_TIMEZONES
+                        yield Select([(f"{label}  ({zone})", zone) for label, zone in COMMON_TIMEZONES],
+                                     id="clock-tz", allow_blank=False, value=COMMON_TIMEZONES[0][1])
+                        yield Button("Set time zone", id="clock-tz-set", variant="primary")
                     yield field("Or set by hand (YYYY-MM-DD HH:MM)", Input(id="clock-manual",
                                                                             restrict=r"[0-9: -]*", max_length=19))
                     with Horizontal(classes="actions"):
@@ -576,7 +587,8 @@ class BatMon(App):
             if theme in self.available_themes:
                 self.theme = theme
                 break
-        self.sub_title = socket.gethostname()
+        self.tick_clock()
+        self.set_interval(1, self.tick_clock)
         for pid, title in [("p-tonight", "Tonight"), ("p-session", "Session"), ("p-mic", "Microphone"),
                            ("p-food", "Food prediction"), ("p-health", "Health"), ("p-recent", "Recent detections")]:
             self.query_one(f"#{pid}").border_title = title
@@ -588,6 +600,11 @@ class BatMon(App):
         self.refresh_status()
         self.set_interval(2, self.refresh_status)
         self.set_interval(3, self.refresh_logs)
+
+    def tick_clock(self):
+        """Header: host and the time in the monitor's configured time zone."""
+        from rtc_scheduler import timezone_abbr
+        self.sub_title = f"{socket.gethostname()}  ·  {local_now():%H:%M} {timezone_abbr()}"
 
     def action_unfocus(self):
         self.set_focus(None)
@@ -706,6 +723,12 @@ class BatMon(App):
                                    style="dim"), "")
 
         self.render_clock(c, s.get("_ntp"))
+        tz_select = self.query_one("#clock-tz", Select)
+        if c.get("timezone") and not tz_select.has_focus and not tz_select.expanded:
+            try:
+                tz_select.value = c["timezone"]
+            except Exception:
+                pass                              # a zone that isn't in the short list
         mdl = s.get("model") or {}
         self.query_one("#sys-info", Static).update(self.kv([
             ("Host", s.get("hostname", "")),
@@ -1081,7 +1104,8 @@ class BatMon(App):
     # -- clock ---------------------------------------------------------------------
 
     def render_clock(self, c: Dict[str, Any], synced: Optional[bool]):
-        rows = [("Pi system clock", (c.get("system_time") or "—").replace("T", "  "))]
+        rows = [("Time zone", c.get("timezone_label") or "—"),
+                ("Pi system clock", (c.get("system_time") or "—").replace("T", "  "))]
         if c.get("rtc_time"):
             rows.append(("DS3231 RTC", c["rtc_time"].replace("T", "  ")))
             if c.get("system_time"):
@@ -1096,15 +1120,31 @@ class BatMon(App):
             rows.append(("Internet time", "synced ✓" if synced else "not synced (no internet?)"))
         self.query_one("#clock-now", Static).update(self.kv(rows))
 
+    @on(Button.Pressed, "#clock-tz-set")
+    def set_timezone(self):
+        zone = self.query_one("#clock-tz", Select).value
+        self.save_timezone(str(zone))
+
+    @work(thread=True, group="clock")
+    def save_timezone(self, zone: str):
+        r = self.backend.request("/api/config", {"system": {"timezone": zone}})
+        if r.get("ok"):
+            from rtc_scheduler import apply_timezone, timezone_label
+            apply_timezone(zone)                  # this panel's own clock too
+            self.call_from_thread(self.notify, f"Time zone: {timezone_label(zone)}")
+        else:
+            self.call_from_thread(self.notify, str(r.get("errors") or r.get("error")), severity="error")
+        self.call_from_thread(self.refresh_status)
+
     @on(Button.Pressed, "#clock-sync")
     def clock_sync(self):
         if ntp_synced() is False:
             self.push_screen(Confirm("System clock isn't internet-synced",
-                                     f"The Pi's clock says {datetime.now():%Y-%m-%d %H:%M}. Copy it to the RTC anyway?",
+                                     f"The Pi's clock says {local_now():%Y-%m-%d %H:%M}. Copy it to the RTC anyway?",
                                      "Copy anyway"),
-                             lambda yes: yes and self.set_clock(datetime.now()))
+                             lambda yes: yes and self.set_clock(local_now()))
         else:
-            self.set_clock(datetime.now())
+            self.set_clock(local_now())
 
     @on(Button.Pressed, "#clock-set")
     def clock_manual(self):

@@ -34,7 +34,8 @@ from feature_extraction import SpectrogramExtractor
 from model_inference import BatClassifier
 from activity_tracker import ActivityTracker
 from email_sender import EmailSender, EmailQueue
-from rtc_scheduler import DS3231, ScheduleManager, set_system_time
+from rtc_scheduler import (DS3231, ScheduleManager, set_system_time, apply_timezone, local_now,
+                           to_utc, ntp_synced, timezone_label, local_from_timestamp)
 import wifi_manager
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -73,6 +74,10 @@ class BatMonitorSystem:
 
         # Load configuration
         self.config = ConfigManager(config_path) if config_path is not None else ConfigManager()
+        self._timezone = str(self.config.get('system.timezone') or 'America/Los_Angeles')
+        note = apply_timezone(self._timezone, system=True)
+        if note:
+            logger.warning(note)
         self._apply_log_level()
         logger.info("Configuration loaded")
 
@@ -105,6 +110,7 @@ class BatMonitorSystem:
         self._skip_current_window = False
         self._detection_dirty = False
         self.started_at = time.time()
+        self._last_clock_sync = time.time()
         self.last_error: Optional[str] = None
         self.last_session: Optional[Dict[str, Any]] = None
         self.session_stats = {"segments": 0, "low_confidence": 0}
@@ -132,6 +138,7 @@ class BatMonitorSystem:
                     self.rtc.close()
                 self.rtc = None
             self.scheduler = ScheduleManager(self.rtc)
+            self._sync_clocks(startup=True)
 
             # Load schedule from config
             schedule_cfg = self.config.get_schedule()
@@ -233,6 +240,25 @@ class BatMonitorSystem:
             logger.warning(f"Web settings UI could not start: {e}")
             self.web_ui = None
 
+    def _sync_clocks(self, startup: bool = False):
+        """Keep the clock chip (UTC) and the Pi's own clock in agreement."""
+        if self.rtc is None:
+            return
+        synced = ntp_synced()
+        try:
+            if not self.config.get('system.rtc_utc', False):
+                # One-time switch: earlier versions kept local time in the chip
+                if not synced:
+                    self.rtc.set_utc(to_utc(self.rtc.get_utc()))
+                self.config.set('system.rtc_utc', True)
+                logger.info("Clock chip now keeps UTC (local time is shown everywhere)")
+            if synced:
+                self.rtc.set_datetime(local_now())          # internet time -> clock chip
+            elif startup:
+                set_system_time(self.rtc.get_datetime())    # no internet: clock chip -> Pi clock
+        except Exception as e:
+            logger.warning(f"Clock sync: {e}")
+
     def _wifi_changed(self, message: str):
         logger.info(message)
         if self.ui:
@@ -265,6 +291,14 @@ class BatMonitorSystem:
                 self.email_queue.max_retries = int(system_cfg.get('email_retry_attempts', 3))
                 self.email_queue.retry_delay = int(system_cfg.get('email_retry_delay', 60))
             self._apply_log_level()
+            tz = str(self.config.get('system.timezone') or self._timezone)
+            if tz != self._timezone:
+                note = apply_timezone(tz, system=True)
+                if note:
+                    logger.warning(note)
+                else:
+                    self._timezone = tz
+                    logger.info(f"Time zone: {timezone_label()}")
             # Detection thresholds are picked up by the audio thread on its next chunk
             self._detection_dirty = True
             logger.info("Settings applied")
@@ -344,7 +378,7 @@ class BatMonitorSystem:
 
             try:
                 # Initialize activity tracker
-                self.activity_tracker = ActivityTracker(start_time=datetime.now())
+                self.activity_tracker = ActivityTracker(start_time=local_now())
                 self.session_stats = {"segments": 0, "low_confidence": 0}
 
                 # Initialize audio capture
@@ -448,7 +482,7 @@ class BatMonitorSystem:
             tracker.add_classification(
                 predicted_class,
                 confidence,
-                datetime.fromtimestamp(start_ts)
+                local_from_timestamp(start_ts)
             )
             logger.debug(f"Classified: {predicted_class} ({confidence:.2%})")
         else:
@@ -531,7 +565,7 @@ class BatMonitorSystem:
 
             # Generate graphs
             REPORT_DIR.mkdir(exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = local_now().strftime("%Y%m%d_%H%M%S")
             timeline_path = str(REPORT_DIR / f"timeline_{timestamp}.png")
             breakdown_path = str(REPORT_DIR / f"breakdown_{timestamp}.png")
 
@@ -621,8 +655,9 @@ class BatMonitorSystem:
             except Exception as e:
                 status["schedule"] = {"error": str(e)}
 
-        clock: Dict[str, Any] = {"system_time": datetime.now().isoformat(timespec='seconds'),
-                                 "rtc_present": self.rtc is not None}
+        clock: Dict[str, Any] = {"system_time": local_now().isoformat(timespec='seconds'),
+                                 "rtc_present": self.rtc is not None,
+                                 "timezone": self._timezone, "timezone_label": timezone_label()}
         if self.rtc:
             try:
                 clock["rtc_time"] = self.rtc.get_datetime().isoformat(timespec='seconds')
@@ -697,6 +732,10 @@ class BatMonitorSystem:
         if not self.scheduler:
             logger.error("Scheduler not initialized")
             return
+
+        if time.time() - self._last_clock_sync > 3600:      # keep the clock chip on internet time
+            self._last_clock_sync = time.time()
+            self._sync_clocks()
 
         if self.scheduler.is_within_schedule():
             if self.is_monitoring:

@@ -14,6 +14,8 @@ from typing import Dict, List, Tuple, Optional
 import logging
 from pathlib import Path
 
+from rtc_scheduler import local_now  # times in the configured time zone
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,7 @@ class ActivityTracker:
         Args:
             start_time: Recording start time (default: now)
         """
-        self.start_time = start_time or datetime.now()
+        self.start_time = start_time or local_now()
         self.end_time: Optional[datetime] = None  # set by finish() when recording stops
         
         # Activity data: {hour: {class_name: count}}
@@ -81,7 +83,7 @@ class ActivityTracker:
             timestamp: Classification timestamp (default: now)
         """
         if timestamp is None:
-            timestamp = datetime.now()
+            timestamp = local_now()
         
         # Store raw classification
         self.classifications.append((timestamp, class_name, confidence))
@@ -153,11 +155,11 @@ class ActivityTracker:
 
     def finish(self, end_time: Optional[datetime] = None):
         """Mark the recording as finished."""
-        self.end_time = end_time or datetime.now()
+        self.end_time = end_time or local_now()
     
     def get_recording_duration(self) -> timedelta:
         """Get total recording duration (start to stop, or to now while still recording)."""
-        end = self.end_time or datetime.now()
+        end = self.end_time or local_now()
         if self.classifications:
             end = max(end, self.classifications[-1][0])
         return max(end - self.start_time, timedelta(0))
