@@ -240,9 +240,23 @@ class MenuScreen(Screen):
         items = self.items_fn()
         return items + [("‹ Back", None)] if self.back else items
 
+    def _selectable(self, items: List[MenuItem], i: int) -> bool:
+        return items[i][1] is not None or (self.back and i == len(items) - 1)
+
     def on_turn(self, ui, steps, speed):
-        n = len(self.items())
-        self.index = (self.index + steps) % max(1, n)
+        items = self.items()
+        n = len(items)
+        step = 1 if steps > 0 else -1
+        for _ in range(abs(steps)):
+            for _ in range(n):                        # skip information lines
+                self.index = (self.index + step) % max(1, n)
+                if self._selectable(items, self.index):
+                    break
+
+    def first_selectable(self):
+        items = self.items()
+        self.index = next((i for i in range(len(items)) if self._selectable(items, i)), 0)
+        return self
 
     def on_click(self, ui):
         items = self.items()
@@ -357,10 +371,14 @@ class KeyboardScreen(Screen):
     """On-screen keyboard. Turn moves the cursor (faster when spun), click types, OK saves."""
     hint = "turn: move   click: type   hold: cancel"
 
-    def __init__(self, label: str, initial: str, on_save: Callable[[str], Optional[str]]):
+    def __init__(self, label: str, initial: str, on_save: Callable[[str], Optional[str]],
+                 warn_spaces: bool = False, saved_message: Optional[str] = "Saved"):
+        """warn_spaces: ask before saving text that starts/ends with a space (passwords).
+        saved_message: pop-up after saving (None when the next screen reports the outcome)."""
         self.title, self.label, self.text, self.on_save = "Enter text", label, initial, on_save
+        self.warn_spaces, self.saved_message = warn_spaces, saved_message
         self.row, self.col = 1, 0
-        self.caps = False
+        self.caps = 0          # 0 = off, 1 = next letter only (like a phone), 2 = caps lock
         self.symbols = False
         self.color = (20, 20, 60)
 
@@ -382,29 +400,60 @@ class KeyboardScreen(Screen):
         elif key == "SPACE":
             self.text += " "
         elif key == "CAPS":
-            self.caps = not self.caps
+            self.caps = (self.caps + 1) % 3
         elif key == "SYM":
             self.symbols = not self.symbols
         elif key == "OK":
-            error = self.on_save(self.text)
-            if error:
-                ui.toast(error, error=True)
+            if self.warn_spaces and self.text != self.text.strip():
+                ui.push(ConfirmScreen("Space at the edge", f'"{self.text}" starts or ends with a space. '
+                                      "Save it like that?", "Save", lambda: self._save(ui)))
                 return
-            ui.pop()
-            ui.toast("Saved")
+            self._save(ui)
         else:
-            self.text += key.upper() if self.caps and key.isalpha() else key
+            if self.caps and key.isalpha():
+                key = key.upper()
+                if self.caps == 1:
+                    self.caps = 0          # one capital, then back to lowercase
+            self.text += key
+
+    def _save(self, ui):
+        error = self.on_save(self.text)
+        if error:
+            ui.toast(error, error=True)
+            return
+        ui.pop()
+        if self.saved_message:
+            ui.toast(self.saved_message)
 
     def on_long(self, ui):
         ui.pop()
         ui.toast("Cancelled - nothing changed")
 
+    def _draw_text(self, ui, d, w, top):
+        """The whole text, wrapped onto a second line when long (only the start is cut, with …)."""
+        box_w = w - 18
+        text = self.text + "▌"
+        if d.textbbox((0, 0), text, font=ui.font_medium)[2] <= box_w:
+            d.text((9, top + 6), text, font=ui.font_medium, fill=ui.COLOR_WHITE)
+            return
+        lines, line = [], ""
+        for ch in text:
+            if d.textbbox((0, 0), line + ch, font=ui.font_small)[2] > box_w:
+                lines.append(line)
+                line = ""
+            line += ch
+        lines.append(line)
+        if len(lines) > 2:
+            lines = lines[-2:]
+            lines[0] = "…" + lines[0][1:]
+        for i, ln in enumerate(lines):
+            d.text((9, top + 2 + i * 15), ln, font=ui.font_small, fill=ui.COLOR_WHITE)
+
     def draw(self, ui, d, w, top, bottom):
-        d.text((6, top), self.label, font=ui.font_small, fill=ui.COLOR_GRAY)
-        shown = self.text[-24:]
-        d.rounded_rectangle((4, top + 15, w - 4, top + 39), radius=4, fill=ui.COLOR_DARK_GRAY)
-        d.text((9, top + 18), shown + "▌", font=ui.font_medium, fill=ui.COLOR_WHITE)
-        key_h, gap, y0 = 24, 2, top + 44
+        d.text((6, top - 2), self.label, font=ui.font_small, fill=ui.COLOR_GRAY)
+        d.rounded_rectangle((4, top + 13, w - 4, top + 45), radius=4, fill=ui.COLOR_DARK_GRAY)
+        self._draw_text(ui, d, w, top + 13)
+        key_h, gap, y0 = 24, 2, top + 49
         for r, row in enumerate(self.rows()):
             fn = row[0] in FN_KEYS
             kw = (w - 8 - gap * (len(row) - 1)) // len(row) if fn else 28
@@ -414,7 +463,11 @@ class KeyboardScreen(Screen):
                 sel = r == self.row and c == self.col
                 on = (key == "CAPS" and self.caps) or (key == "SYM" and self.symbols)
                 label = key.upper() if self.caps and len(key) == 1 and key.isalpha() else key
-                fill = ui.COLOR_YELLOW if sel else (ui.COLOR_BLUE_DIM if on else ui.COLOR_DARK_GRAY)
+                if key == "CAPS":
+                    label = ("caps", "Caps", "CAPS")[self.caps]
+                fill = ui.COLOR_YELLOW if sel else (
+                    (ui.COLOR_BLUE if self.caps == 2 and key == "CAPS" else ui.COLOR_BLUE_DIM) if on
+                    else ui.COLOR_DARK_GRAY)
                 d.rounded_rectangle((x, y, x + kw, y + key_h - 1), radius=4, fill=fill)
                 bb = d.textbbox((0, 0), label, font=ui.font_small)
                 d.text((x + (kw - (bb[2] - bb[0])) // 2, y + (key_h - (bb[3] - bb[1])) // 2 - 2), label,
@@ -734,6 +787,9 @@ class UIController:
             elif ev[0] == "main_menu":
                 del self._stack[1:]
                 redraw = True
+            elif ev[0] == "call":                  # work finished in the background
+                ev[1]()
+                redraw = True
             elif ev[0] == "learned":
                 # remember the knob type so the first spin after a reboot is right too
                 self.config.set("display.encoder_half_step", ev[1] == "half")
@@ -872,7 +928,8 @@ class UIController:
                 return self.rtc.get_datetime()
             except Exception:
                 pass
-        return datetime.now()
+        from rtc_scheduler import local_now
+        return local_now()
 
     def _monitoring(self) -> bool:
         try:
@@ -951,7 +1008,7 @@ class UIController:
             slope = float(self.config.get("email.trendline_slope", 6.4899))
             icpt = float(self.config.get("email.trendline_intercept", 40.2899))
             return [
-                (now.strftime("%a %d %b %Y  %H:%M:%S"), self.COLOR_WHITE),
+                (now.strftime("%a %d %b %Y  %H:%M:%S ") + self._tz_abbr(), self.COLOR_WHITE),
                 ("Monitoring: ACTIVE" if self._monitoring() else "Monitoring: idle",
                  self.COLOR_GREEN if self._monitoring() else self.COLOR_GRAY),
                 ("", None),
@@ -961,8 +1018,25 @@ class UIController:
                 (f"Trendline  {slope:.2f} × calls/hr + {icpt:.2f}", self.COLOR_WHITE),
                 (f"RTC temp: {temp:.1f}°C" if temp is not None else "RTC: not found (system clock)",
                  self.COLOR_CYAN),
-            ]
+            ] + self._network_rows()
         self.push(InfoScreen("Status", rows))
+
+    @staticmethod
+    def _tz_abbr() -> str:
+        from rtc_scheduler import timezone_abbr
+        return timezone_abbr()
+
+    def _network_rows(self) -> List[Tuple[str, tuple]]:
+        import wifi_manager
+        st = wifi_manager.current_status()
+        if st["hotspot"]:
+            return [(f"Setup mode: {st['hotspot_name']}", self.COLOR_YELLOW),
+                    (f"ssh to {wifi_manager.HOTSPOT_ADDRESS}", self.COLOR_YELLOW)]
+        if st["connected"]:
+            return [(f"WiFi: {st['ssid'][:24]}", self.COLOR_GREEN),
+                    (f"IP: {st['ip'] or 'waiting for address'}", self.COLOR_GREEN)]
+        other = f"  (IP {st['other_ips'][0]})" if st["other_ips"] else ""
+        return [("WiFi: not connected" + other, self.COLOR_RED)]
 
     # schedule -----------------------------------------------------------------
 
@@ -993,6 +1067,32 @@ class UIController:
     # clock --------------------------------------------------------------------
 
     def _open_clock(self):
+        def items():
+            from rtc_scheduler import timezone_label
+            return [(f"Date & time   {self._now():%d %b %H:%M}", self._edit_clock),
+                    (f"Time zone   {timezone_label()}"[:34], self._pick_timezone)]
+        menu = MenuScreen("Clock", items, color=(15, 50, 110))
+        menu.live = True
+        self.push(menu)
+
+    def _pick_timezone(self):
+        from rtc_scheduler import COMMON_TIMEZONES, timezone_label
+        current = self.config.get("system.timezone")
+
+        def choose(zone):
+            self.config.set("system.timezone", zone)
+            self._settings_changed()              # the monitor applies it right away
+            self.pop()
+            self.toast(f"Time zone: {timezone_label(zone)}")
+
+        def items():
+            return [(("✓ " if zone == current else "   ") + timezone_label(zone), lambda z=zone: choose(z))
+                    for _label, zone in COMMON_TIMEZONES]
+        menu = MenuScreen("Time zone", items, color=(15, 50, 110))
+        menu.index = next((i for i, (_l, z) in enumerate(COMMON_TIMEZONES) if z == current), 0)
+        self.push(menu)
+
+    def _edit_clock(self):
         now = self._now()
 
         def save(v):
@@ -1034,7 +1134,7 @@ class UIController:
             return rows
         self.push(MenuScreen("Email", items, color=(80, 40, 0)))
 
-    def _edit_text(self, label: str, key: str, initial: Optional[str] = None):
+    def _edit_text(self, label: str, key: str, initial: Optional[str] = None, warn_spaces: bool = False):
         def save(text):
             value = text if "password" in key else text.strip()
             if key.endswith("email") and value and "@" not in value:
@@ -1043,7 +1143,7 @@ class UIController:
             self._settings_changed()
             return None
         start = self.config.get(key, "") if initial is None else initial
-        self.push(KeyboardScreen(label, start or "", save))
+        self.push(KeyboardScreen(label, start or "", save, warn_spaces=warn_spaces or "password" in key))
 
     def _add_recipient(self):
         def save(text):
@@ -1100,17 +1200,66 @@ class UIController:
     def _open_wifi(self):
         def items():
             w = self.config.get_wifi_config()
-            return [(f"Network: {(w.get('ssid') or '(not set)')[:20]}",
-                     lambda: self._edit_text("WiFi network name", "wifi.ssid")),
-                    (f"Password: {'(set)' if w.get('password') else '(not set)'}",
-                     lambda: self._edit_text("WiFi password", "wifi.password", initial="")),
-                    ("Connect now", self._connect_wifi)]
-        self.push(MenuScreen("WiFi", items, color=(0, 60, 80)))
+            info: List[MenuItem] = [(text, None) for text, _ in self._network_rows()]
+            return info + [
+                ("Choose network…", self._scan_networks),
+                (f"Network: {(w.get('ssid') or '(not set)')[:18]}",
+                 lambda: self._edit_text("WiFi network name", "wifi.ssid")),
+                (f"Password: {'(set)' if w.get('password') else '(not set)'}",
+                 lambda: self._edit_text("WiFi password", "wifi.password", initial="")),
+                ("Connect now", self._connect_wifi),
+            ]
+        menu = MenuScreen("WiFi", items, color=(0, 60, 80)).first_selectable()
+        menu.live = True                      # keep the connection/IP lines current
+        self.push(menu)
+
+    def _scan_networks(self):
+        def work():
+            import wifi_manager
+            nets = wifi_manager.scan()
+            if not nets:
+                return "No networks found. Move closer, or type the name with Network:"
+            self._events.put(("call", lambda: self._show_networks(nets)))
+            return None
+        self.push(TaskScreen(self, "WiFi", "Scanning", work, "Networks found", color=(0, 60, 80)))
+
+    def _show_networks(self, nets: List[dict]):
+        if isinstance(self.screen, TaskScreen):
+            self.pop()
+
+        def bars(signal: int) -> str:
+            n = max(1, min(4, round(signal / 25)))
+            return "▂▄▆█"[:n].ljust(4)
+
+        def items():
+            return [(f"{bars(n['signal'])} {n['ssid'][:19]}{'' if n['secure'] else '  (open)'}",
+                     lambda n=n: self._pick_network(n)) for n in nets]
+        self.push(MenuScreen("Choose network", items, color=(0, 60, 80)))
+
+    def _pick_network(self, net: dict):
+        self.pop()                            # the list
+        ssid = net["ssid"]
+        self.config.set("wifi.ssid", ssid)
+        if not net["secure"]:
+            self.config.set("wifi.password", "")
+            self._settings_changed()
+            self._connect_wifi()
+            return
+
+        def save(text):
+            if not 8 <= len(text) <= 64:
+                return "WiFi passwords are 8-63 characters"
+            self.config.set("wifi.password", text)
+            self._settings_changed()
+            self._events.put(("call", self._connect_wifi))     # after the keyboard closes
+            return None
+        self.push(KeyboardScreen(f"Password for {ssid[:24]}", "", save, warn_spaces=True,
+                                 saved_message=None))     # the connect screen says how it went
 
     def _connect_wifi(self):
         w = self.config.get_wifi_config()
         if not (w.get("ssid") or "").strip():
-            self.toast("Set the network name first", error=True)
+            self.toast("Choose a network first", error=True)
             return
 
         def work():

@@ -104,6 +104,13 @@ def _email_list(v: Any) -> List[str]:
     return out
 
 
+def _timezone(v: Any) -> str:
+    from rtc_scheduler import valid_timezone
+    if not isinstance(v, str) or not valid_timezone(v.strip()):
+        raise ValueError("is not a known time zone (e.g. America/Los_Angeles)")
+    return v.strip()
+
+
 def _choice(*options: Any) -> Callable[[Any], Any]:
     def check(v: Any) -> Any:
         if v not in options:
@@ -142,9 +149,12 @@ FIELDS: Dict[str, Dict[str, Callable[[Any], Any]]] = {
     },
     "wifi": {
         "ssid": _text(32),
-        "password": _text(63),
+        "password": _text(64),
+        "setup_hotspot": _bool,
+        "hotspot_password": _text(63),
     },
     "system": {
+        "timezone": _timezone,
         "log_level": _choice("DEBUG", "INFO", "WARNING", "ERROR"),
         "email_retry_attempts": _num(int, 1, 20),
         "email_retry_delay": _num(int, 5, 3600),
@@ -161,7 +171,7 @@ FIELDS: Dict[str, Dict[str, Callable[[Any], Any]]] = {
 }
 
 # Write-only fields: never sent back to the browser
-SECRETS = {("email", "sender_password"), ("wifi", "password")}
+SECRETS = {("email", "sender_password"), ("wifi", "password"), ("wifi", "hotspot_password")}
 
 # Changing these only takes effect after the monitor restarts / next session
 NEXT_SESSION = {("audio", "sample_rate"), ("audio", "channels"), ("audio", "chunk_duration")}
@@ -208,6 +218,9 @@ def validate_updates(config: ConfigManager, updates: Any) -> Tuple[Dict[str, Dic
     audio = {**config.get_audio_config(), **clean.get("audio", {})}
     if audio["min_vocalization_duration"] >= audio["max_vocalization_duration"]:
         errors["audio.max_vocalization_duration"] = "must be longer than the minimum duration"
+    hp = clean.get("wifi", {}).get("hotspot_password")
+    if hp is not None and not 8 <= len(hp) <= 63:
+        errors["wifi.hotspot_password"] = "must be 8-63 characters"
     if "web" in clean and "host" in clean["web"]:
         host = clean["web"]["host"].strip()
         try:
@@ -367,8 +380,9 @@ class WebUI:
 
     def api_wifi_status(self) -> Dict[str, Any]:
         import wifi_manager
-        return {"current": wifi_manager.current_status(),
-                "networkmanager": wifi_manager.has_networkmanager()}
+        return {"current": wifi_manager.current_status(max_age=0),
+                "networkmanager": wifi_manager.has_networkmanager(),
+                "hotspot_address": wifi_manager.HOTSPOT_ADDRESS}
 
     def api_wifi_scan(self) -> Dict[str, Any]:
         import wifi_manager

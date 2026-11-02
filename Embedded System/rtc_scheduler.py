@@ -1,9 +1,23 @@
 """
 DS3231 Real-Time Clock interface for scheduling.
 Provides accurate timekeeping and schedule management for autonomous operation.
+
+Time handling (like Linux itself does it):
+- The DS3231 chip keeps UTC, so daylight-saving changes never make it wrong.
+- Everything shown or scheduled uses one configurable time zone
+  (config "system.timezone"); the conversion happens here.
 """
 
-from typing import Any, Optional
+import os
+import time
+from datetime import timezone as _utc_tz
+from typing import Any, List, Optional, Tuple
+
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ImportError:                       # Python < 3.9
+    ZoneInfo = None                       # type: ignore[assignment,misc]
+    ZoneInfoNotFoundError = Exception     # type: ignore[assignment,misc]
 
 try:
     import smbus2 as _smbus2  # type: ignore[import-not-found]
@@ -19,6 +33,122 @@ import threading
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Time zone
+# ---------------------------------------------------------------------------
+
+DEFAULT_TIMEZONE = "America/Los_Angeles"     # the Oregon Zoo
+# Offered in the device's menu and the control panel (any IANA name works in config.json)
+COMMON_TIMEZONES: List[Tuple[str, str]] = [
+    ("Pacific", "America/Los_Angeles"),
+    ("Mountain", "America/Denver"),
+    ("Arizona", "America/Phoenix"),
+    ("Central", "America/Chicago"),
+    ("Eastern", "America/New_York"),
+    ("Alaska", "America/Anchorage"),
+    ("Hawaii", "Pacific/Honolulu"),
+    ("UTC", "UTC"),
+]
+
+_tz: Any = None          # ZoneInfo for the configured zone (None = the computer's own zone)
+_tz_name: Optional[str] = None
+
+
+def valid_timezone(name: str) -> bool:
+    if not name or ZoneInfo is None:
+        return False
+    try:
+        ZoneInfo(name)
+        return True
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return False
+
+
+def apply_timezone(name: str, system: bool = False) -> str:
+    """
+    Use time zone `name` for every local time in this program. With system=True
+    also set the Pi's own time zone (shell, logs of other programs) - that needs
+    passwordless sudo and is skipped quietly if it isn't available.
+
+    Returns "" or a note about what couldn't be done.
+    """
+    global _tz, _tz_name
+    if not valid_timezone(name):
+        return f"Unknown time zone {name!r}"
+    _tz, _tz_name = ZoneInfo(name), name
+    if hasattr(time, "tzset"):
+        os.environ["TZ"] = name          # datetime.now(), log timestamps etc. follow this
+        time.tzset()
+    if not system:
+        return ""
+    try:
+        current = subprocess.run(["timedatectl", "show", "-p", "Timezone", "--value"],
+                                 capture_output=True, text=True, timeout=10).stdout.strip()
+        if current and current != name:
+            proc = subprocess.run(["sudo", "-n", "timedatectl", "set-timezone", name],
+                                  capture_output=True, text=True, timeout=15)
+            if proc.returncode != 0:
+                return f"Couldn't set the Pi's time zone: {proc.stderr.strip()}"
+            logger.info(f"Pi time zone set to {name}")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return ""
+
+
+def timezone_name() -> str:
+    return _tz_name or time.tzname[0]
+
+
+def timezone_label(name: Optional[str] = None) -> str:
+    """e.g. 'Pacific (PST, UTC-8)'"""
+    name = name or _tz_name
+    if not name or not valid_timezone(name):
+        return timezone_name()
+    now = datetime.now(ZoneInfo(name))
+    off = now.utcoffset() or timedelta(0)
+    hours = off.total_seconds() / 3600
+    off_txt = "UTC" if hours == 0 else f"UTC{hours:+g}"
+    friendly = next((label for label, zone in COMMON_TIMEZONES if zone == name), name)
+    abbr = now.tzname()
+    return f"{friendly} ({abbr}, {off_txt})" if abbr and abbr != "UTC" else f"{friendly} ({off_txt})"
+
+
+def timezone_abbr() -> str:
+    """e.g. 'PST' / 'PDT' right now."""
+    return datetime.now(_tz).tzname() if _tz else time.strftime("%Z")
+
+
+def local_from_timestamp(ts: float) -> datetime:
+    """Unix timestamp -> local time in the configured zone (no tzinfo)."""
+    return datetime.fromtimestamp(ts, _tz).replace(tzinfo=None) if _tz else datetime.fromtimestamp(ts)
+
+
+def local_now() -> datetime:
+    """Current local time (configured zone), without tzinfo."""
+    return datetime.now(_tz).replace(tzinfo=None) if _tz else datetime.now()
+
+
+def to_utc(local: datetime) -> datetime:
+    """Local time (configured zone, no tzinfo) -> UTC (no tzinfo)."""
+    aware = local.replace(tzinfo=_tz) if _tz else local.astimezone()
+    return aware.astimezone(_utc_tz.utc).replace(tzinfo=None)
+
+
+def from_utc(utc: datetime) -> datetime:
+    """UTC (no tzinfo) -> local time in the configured zone (no tzinfo)."""
+    return utc.replace(tzinfo=_utc_tz.utc).astimezone(_tz).replace(tzinfo=None)
+
+
+def ntp_synced() -> Optional[bool]:
+    """True if the system clock is set from the internet right now (None = can't tell)."""
+    try:
+        p = subprocess.run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+                           capture_output=True, text=True, timeout=5)
+        return p.stdout.strip() == "yes" if p.returncode == 0 else None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
 
 
 class DS3231:
@@ -78,9 +208,18 @@ class DS3231:
         return ((dec // 10) << 4) + (dec % 10)
     
     def get_datetime(self) -> datetime:
+        """Current local time (configured time zone) from the clock chip."""
+        return from_utc(self.get_utc())
+
+    def set_datetime(self, dt: datetime):
+        """Set the clock chip from a local time (configured time zone)."""
+        self.set_utc(to_utc(dt))
+        logger.info(f"RTC set to {dt:%Y-%m-%d %H:%M:%S} local")
+
+    def get_utc(self) -> datetime:
         """
-        Read current date and time from RTC.
-        
+        Read the chip's registers (UTC).
+
         Returns:
             datetime object with current RTC time
         """
@@ -113,12 +252,12 @@ class DS3231:
             logger.error(f"Failed to read datetime from RTC: {e}")
             raise
     
-    def set_datetime(self, dt: datetime):
+    def set_utc(self, dt: datetime):
         """
-        Set RTC date and time.
-        
+        Write the chip's registers.
+
         Args:
-            dt: datetime object to set
+            dt: UTC time to store
         """
         if self.bus is None:
             raise RuntimeError("DS3231 bus is not initialized")
@@ -140,8 +279,8 @@ class DS3231:
                 status = self.bus.read_byte_data(self.ADDRESS, self.REG_STATUS)
                 self.bus.write_byte_data(self.ADDRESS, self.REG_STATUS, status & 0x7F)
             
-            logger.info(f"RTC time set to: {dt}")
-        
+            logger.debug(f"RTC registers set to {dt} UTC")
+
         except Exception as e:
             logger.error(f"Failed to set RTC datetime: {e}")
             raise
@@ -189,12 +328,13 @@ class DS3231:
 
 
 def set_system_time(dt: datetime):
-    """Set the Linux system clock (needs root or passwordless sudo)."""
-    time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+    """Set the Linux system clock from a local time (needs root or passwordless sudo)."""
+    utc_str = to_utc(dt).strftime("%Y-%m-%d %H:%M:%S")
+    # -u: give it UTC, so it's right whatever the Pi's own time zone is set to.
     # -n: fail instead of hanging on a password prompt when running as a service
-    subprocess.run(['sudo', '-n', 'date', '-s', time_str], check=True,
+    subprocess.run(['sudo', '-n', 'date', '-u', '-s', utc_str], check=True,
                    capture_output=True, timeout=10)
-    logger.info(f"System time set to: {time_str}")
+    logger.info(f"System time set to: {dt:%Y-%m-%d %H:%M:%S} local ({utc_str} UTC)")
 
 
 class ScheduleManager:
@@ -230,7 +370,7 @@ class ScheduleManager:
                 if not self._rtc_failed:
                     logger.warning(f"RTC read failed ({e}); using system clock until it recovers")
                     self._rtc_failed = True
-        return datetime.now()
+        return local_now()
 
     @property
     def clock_source(self) -> str:
@@ -341,7 +481,8 @@ class ScheduleManager:
             'time_until_start': self.get_time_until_start(),
             'time_until_stop': self.get_time_until_stop(),
             'current_time': self.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'clock_source': self.clock_source
+            'clock_source': self.clock_source,
+            'timezone': timezone_label()
         }
 
 

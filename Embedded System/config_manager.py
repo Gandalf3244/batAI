@@ -59,7 +59,8 @@ class ConfigManager:
             "val_macro_f1": 0.9751
         },
         "system": {
-            "timezone": "America/New_York",
+            "timezone": "America/Los_Angeles",   # used for every time shown and the schedule
+            "rtc_utc": False,                    # set once the clock chip has been switched to UTC
             "log_level": "INFO",
             "watchdog_timeout": 300,  # seconds
             "email_retry_attempts": 3,
@@ -68,7 +69,9 @@ class ConfigManager:
         "wifi": {
             "ssid": "",
             "password": "",
-            "auto_connect": True
+            "auto_connect": True,
+            "setup_hotspot": True,              # no WiFi ~90 s after boot -> start "BatPi-Setup"
+            "hotspot_password": "batsetup123"   # change this for a unit in a public place
         },
         "display": {
             "rotate_180": True,        # the screen module is mounted upside down
@@ -138,6 +141,10 @@ class ConfigManager:
                 config["email"][key] = old_display[key]
             if config["display"].pop(key, None) is not None:
                 changed = True
+        # The old default time zone was never actually used; the unit is at the Oregon Zoo
+        if loaded.get("system", {}).get("timezone") == "America/New_York" and                 "rtc_utc" not in loaded.get("system", {}):
+            config["system"]["timezone"] = "America/Los_Angeles"
+            changed = True
         # Unused old display settings
         for key in ("contrast", "flip"):
             if config["display"].pop(key, None) is not None:
