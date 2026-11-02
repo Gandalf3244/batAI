@@ -46,11 +46,17 @@ L/R       -->    GND (for left channel)
 ```
 DS3231           Raspberry Pi Zero 2 W
 -------          ---------------------
-VCC       -->    3.3V or 5V (Pin 2 or Pin 4)
+VCC       -->    3.3V (Pin 1)   ← not 5V: see the battery note below
 GND       -->    GND (Pin 6)
 SDA       -->    GPIO 2 / SDA (Pin 3)
 SCL       -->    GPIO 3 / SCL (Pin 5)
 ```
+
+Power the RTC from **3.3 V**:
+- **Safe I2C levels:** most DS3231 boards pull SDA/SCL up to their VCC, and the Pi's pins are 3.3 V only.
+- **Battery:** the common DS3231 board with a CR2032 holder on the back ("ZS-042") has a charging circuit meant for a *rechargeable* LIR2032. On 5 V it pushes about 4.3 V into a normal, non-rechargeable CR2032, which can make it swell or leak. On 3.3 V it hardly charges at all.
+
+A CR2032 doesn't need charging anyway: the clock draws only a few microamps from it, so it lasts for years.
 
 ### 2.0" TFT LCD Display with EC11 Rotary Encoder (SPI)
 ```
