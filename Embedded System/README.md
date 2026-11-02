@@ -38,7 +38,7 @@ VDD       -->    3.3V (Pin 1)
 GND       -->    GND (Pin 6)
 SCK       -->    GPIO 18 / BCM 18 (Pin 12)
 WS        -->    GPIO 19 / BCM 19 (Pin 35)
-SD        -->    GPIO 21 / BCM 21 (Pin 40)
+SD        -->    GPIO 20 / BCM 20 (Pin 38)  ← data INPUT (not Pin 40)
 L/R       -->    GND (for left channel)
 ```
 

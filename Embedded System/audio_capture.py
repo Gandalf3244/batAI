@@ -29,7 +29,8 @@ class I2SAudioCapture:
     Hardware Connections (BCM pin numbering):
     - SCK (Serial Clock): GPIO 18 (BCM)
     - WS (Word Select/LRCLK): GPIO 19 (BCM)
-    - SD (Serial Data): GPIO 21 (BCM)
+    - SD (Serial Data): GPIO 20 (BCM, pin 38) - the Pi's I2S data *input*
+      (GPIO 21 / pin 40 is the data output and would only give silence)
     - VDD: 3.3V
     - GND: Ground
     - L/R: GND (for left channel)
@@ -64,7 +65,9 @@ class I2SAudioCapture:
         self.chunks_captured = 0
         self.chunks_dropped = 0
         self.start_time = None
-        
+        self.channel = 0          # which input channel the mic is on (detected)
+        self.silent_chunks = 0
+
         logger.info(f"I2S Audio Capture initialized: {sample_rate}Hz, {channels}ch, {chunk_duration}s chunks")
     
     def _find_i2s_device(self) -> Optional[int]:
@@ -115,6 +118,27 @@ class I2SAudioCapture:
             if self.chunks_dropped % 10 == 0:
                 logger.warning(f"Audio buffer full! Dropped {self.chunks_dropped} chunks total")
     
+    def _pick_channel(self, chunk: np.ndarray) -> int:
+        """Stay on the current channel unless another one is clearly (10x) louder."""
+        energy = np.mean(chunk.astype(np.float64) ** 2, axis=0)
+        best = int(np.argmax(energy))
+        if best != self.channel and energy[best] > 10 * energy[self.channel] + 1e-20:
+            logger.info(f"Microphone signal is on channel {best} "
+                        f"({'left' if best == 0 else 'right'}); using that one")
+            self.channel = best
+        return self.channel
+
+    def _check_silence(self, chunk: np.ndarray):
+        """Warn once if the mic delivers nothing but exact zeros (a wiring problem)."""
+        if chunk.size and not np.any(chunk):
+            self.silent_chunks += 1
+            if self.silent_chunks == 10:
+                logger.error("Microphone sends only silence (all zeros). Check the wiring: "
+                             "SD -> GPIO 20 (Pin 38), SCK -> GPIO 18 (Pin 12), "
+                             "WS -> GPIO 19 (Pin 35), VDD -> 3.3V, L/R -> GND")
+        else:
+            self.silent_chunks = 0
+
     def _processing_loop(self):
         """Process audio chunks from queue."""
         logger.info("Audio processing loop started")
@@ -125,9 +149,11 @@ class I2SAudioCapture:
                 # Get chunk with timeout
                 audio_chunk, timestamp = self.audio_queue.get(timeout=0.5)
                 
-                # Convert stereo to mono by taking left channel only
+                # Stereo -> mono: use the channel the mic is actually on (the INMP441
+                # sends on the left or right channel depending on its L/R pin)
                 if audio_chunk.ndim > 1:
-                    audio_chunk = audio_chunk[:, 0]
+                    audio_chunk = audio_chunk[:, self._pick_channel(audio_chunk)]
+                self._check_silence(audio_chunk)
                 
                 # Flatten to 1D array
                 audio_chunk = audio_chunk.flatten()
