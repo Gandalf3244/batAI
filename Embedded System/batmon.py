@@ -688,6 +688,7 @@ class BatMon(App):
               ("Disk free", f"{h['disk_free_gb']} GB" if "disk_free_gb" in h else "—"),
               ("Email", "not set up" if not e.get("configured") else
                f"{e.get('recipients', 0)} recipient(s)" + (f", {e['queued']} queued" if e.get("queued") else "")),
+              ("Network", self.network_text(s.get("network") or {})),
               ("Uptime", fmt_dur(s.get("uptime_s")))]
         self.query_one("#health", Static).update(self.kv(hl))
 
@@ -711,6 +712,14 @@ class BatMon(App):
             ("Model", f"{mdl.get('file', '?')}" + ("  (count correction on)" if mdl.get("count_correction") else "")),
             ("Device screen", "connected" if s.get("tft_display") else "not found (headless)"),
             ("Monitor uptime", fmt_dur(s.get("uptime_s")))]))
+
+    @staticmethod
+    def network_text(n: Dict[str, Any]) -> str:
+        if n.get("hotspot"):
+            return f"setup mode ({n.get('hotspot_name')})"
+        if n.get("connected"):
+            return f"{n.get('ssid')} · {n.get('ip') or '…'}"
+        return "WiFi not connected"
 
     def notify_once(self, msg: str):
         if getattr(self, "_last_error_shown", None) != msg:
@@ -1012,8 +1021,14 @@ class BatMon(App):
     def load_wifi(self):
         r = self.backend.request("/api/wifi", timeout=15)
         cur = r.get("current") or {}
-        text = self.kv([("Connected to", cur.get("ssid") or "not connected"), ("IP address", cur.get("ip") or "—"),
-                        ("Managed by", "NetworkManager" if r.get("networkmanager") else "wpa_supplicant")])
+        if cur.get("hotspot"):
+            rows = [("Setup mode", f"the Pi is running its own network '{cur.get('hotspot_name')}'"),
+                    ("Reach it at", r.get("hotspot_address", "10.42.0.1")),
+                    ("", "Pick your network below to leave setup mode.")]
+        else:
+            rows = [("Connected to", cur.get("ssid") or "not connected"), ("IP address", cur.get("ip") or "—")]
+        rows.append(("Managed by", "NetworkManager" if r.get("networkmanager") else "wpa_supplicant"))
+        text = self.kv(rows)
         self.call_from_thread(lambda: self.query_one("#wifi-now", Static).update(text))
 
     @on(Button.Pressed, "#wifi-scan")

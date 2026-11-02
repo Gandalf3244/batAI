@@ -236,6 +236,22 @@ Edit `config.json`:
 2. Generate App Password: https://myaccount.google.com/apppasswords
 3. Use the app password (not your regular password)
 
+### WiFi (and getting back in if it's wrong)
+
+**Joining a network:** on the device, open **WiFi → Choose network…**, pick yours from the list and type only the password. The top of the WiFi menu (and **Status**) shows which network the Pi is on and its IP address, which is the address to SSH to.
+
+**Setup hotspot:** if the Pi can't join any network about 90 seconds after it starts (wrong password, new place, router off), it creates its own WiFi network so you're never locked out:
+
+1. Connect your laptop or phone to the WiFi network **BatPi-Setup** (password `batsetup123`).
+2. SSH in with `ssh <your-pi-user>@10.42.0.1`. The control panel opens; use **WiFi** (key `5`) to pick a network. Or use the device's WiFi menu.
+3. The hotspot turns off by itself once the Pi joins a network. Every 5 minutes it also briefly retries the saved networks, so after a power cut it reconnects as soon as the router is back. Nobody connected to the hotspot is interrupted.
+
+Change the hotspot password in `config.json` (`wifi.hotspot_password`), or turn the hotspot off with `wifi.setup_hotspot: false`.
+
+**Hotel, school and guest WiFi** usually block devices from reaching each other and need a sign-in page in a browser. The Pi can't use those: use a phone hotspot or a normal home or zoo network.
+
+**No internet at night?** Reports are never lost. If one can't be emailed, it's kept in `reports/outbox` and sent automatically once the Pi is back online, even after a restart.
+
 ### Using the Device Screen and Knob
 
 The knob works the same way on every screen:

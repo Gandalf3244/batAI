@@ -35,6 +35,7 @@ from model_inference import BatClassifier
 from activity_tracker import ActivityTracker
 from email_sender import EmailSender, EmailQueue
 from rtc_scheduler import DS3231, ScheduleManager, set_system_time
+import wifi_manager
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOG_PATH = SCRIPT_DIR / 'bat_monitor.log'
@@ -89,6 +90,7 @@ class BatMonitorSystem:
         self.activity_tracker: Optional[ActivityTracker] = None
         self.email_sender: Optional[EmailSender] = None
         self.email_queue: Optional[EmailQueue] = None
+        self.wifi_watchdog: Optional[wifi_manager.SetupHotspotWatchdog] = None
 
         # System state
         self.is_monitoring = False
@@ -192,11 +194,19 @@ class BatMonitorSystem:
                 self.email_sender,
                 max_retries=int(system_cfg.get('email_retry_attempts', 3)),
                 retry_delay=int(system_cfg.get('email_retry_delay', 60)),
+                outbox_dir=str(REPORT_DIR / "outbox"),     # unsent reports wait here, never deleted
             )
             self.email_queue.start()
 
             # Web settings UI (reach it from your computer through an SSH tunnel)
             self._start_web_ui()
+
+            # Never get locked out: no WiFi shortly after boot -> setup hotspot
+            self.wifi_watchdog = wifi_manager.SetupHotspotWatchdog(
+                enabled=lambda: bool(self.config.get('wifi.setup_hotspot', True)),
+                on_change=self._wifi_changed,
+                password=lambda: str(self.config.get('wifi.hotspot_password') or wifi_manager.HOTSPOT_PASSWORD))
+            self.wifi_watchdog.start()
 
             logger.info("System initialization complete!")
             if self.ui:
@@ -222,6 +232,11 @@ class BatMonitorSystem:
         except Exception as e:
             logger.warning(f"Web settings UI could not start: {e}")
             self.web_ui = None
+
+    def _wifi_changed(self, message: str):
+        logger.info(message)
+        if self.ui:
+            self.ui.show_message(message, duration=15.0)
 
     def _apply_log_level(self):
         level = str(self.config.get('system.log_level', 'INFO')).upper()
@@ -624,6 +639,7 @@ class BatMonitorSystem:
         }
 
         status["system"] = self._system_health()
+        status["network"] = wifi_manager.current_status()
         return status
 
     @staticmethod
@@ -715,6 +731,9 @@ class BatMonitorSystem:
 
         if self.web_ui:
             self.web_ui.stop()
+
+        if self.wifi_watchdog:
+            self.wifi_watchdog.stopped = True
 
         # Clean up UI
         if self.ui:

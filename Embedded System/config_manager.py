@@ -68,7 +68,9 @@ class ConfigManager:
         "wifi": {
             "ssid": "",
             "password": "",
-            "auto_connect": True
+            "auto_connect": True,
+            "setup_hotspot": True,              # no WiFi ~90 s after boot -> start "BatPi-Setup"
+            "hotspot_password": "batsetup123"   # change this for a unit in a public place
         },
         "display": {
             "rotate_180": True,        # the screen module is mounted upside down
